@@ -264,19 +264,29 @@ EOF
     <key>ProcessType</key>
     <string>Adaptive</string>
 
-    <!-- 只需要网络与文件操作；不需要任何设备或隐私权限 -->
-    <key>Sandboxing</key>
-    <dict>
-        <key>AllowNetworkClient</key>
-        <true/>
-        <key>AllowNetworkServer</key>
-        <true/>
-        <key>AllowFileRead*</key>
-        <true/>
-    </dict>
+    <!--
+      刻意**不**声明 Sandboxing。
 
-    <!-- 注意：不声明 MachServices，因此 launchd 不要求代码签名。
-         这正是与 SMAppService 路线的关键区别。 -->
+      实测踩过：这里原本写了
+        <key>Sandboxing</key><dict>
+          AllowNetworkClient / AllowNetworkServer / AllowFileRead*
+        </dict>
+      这些键名是**编造的** —— LaunchDaemon 的沙箱 profile 实际用
+      `Sockets` / `FileAccess` 子字典。launchd 遇到无法识别的 sandbox
+      profile 会在 exec 进程**之前**就把 job 杀掉，于是：
+        - bootstrap 居然返回成功
+        - /var/log/oc-gui-helper.log 连创建都没有（空）
+        - 表现为「daemon 未运行，日志里什么都没有」
+
+      本机所有系统 LaunchDaemon 也都不带 Sandboxing，可作参照。
+
+      更根本的原因：沙箱化一个要分配 utun、执行 vpnc-script、写
+      0600 配置文件的 helper 必然失败 —— 沙箱会挡住全部这些动作。
+      授权安全靠的是 socket 权限 + getpeereid() 复检，不是沙箱。
+
+      另：刻意不声明 MachServices，因此 launchd 不要求代码签名。
+      这正是与 SMAppService 路线的关键区别。
+    -->
 </dict>
 </plist>
 EOF
@@ -288,16 +298,45 @@ plutil -lint "$PLIST" >/dev/null || die "生成的 plist 语法错误"
 
 # ── 7. 加载 ───────────────────────────────────────────────────
 log "launchctl bootstrap system/$LABEL"
-launchctl bootstrap "system/$PLIST" || die "bootstrap 失败"
+if ! launchctl bootstrap "system/$PLIST"; then
+  echo "--- launchctl bootstrap 的原始输出已在上方 ---" >&2
+  launchctl print "system/$LABEL" 2>&1 | head -20 >&2 || true
+  die "bootstrap 失败"
+fi
 
 # ── 8. 验证 ───────────────────────────────────────────────────
-sleep 1
-if launchctl print "system/$LABEL" >/dev/null 2>&1; then
-  log "✓ daemon 已加载 (pid=$(launchctl print "system/$LABEL" 2>/dev/null | awk '/pid =/{print $3; exit}') )"
+# 轮询而不是固定 sleep 1：launchd 启动 + 二进制 exec 有延迟，
+# 睡 1 秒可能只是还没起来，会误报失败。
+loaded=0
+for _ in $(seq 1 20); do
+  if launchctl print "system/$LABEL" >/dev/null 2>&1; then loaded=1; break; fi
+  sleep 0.5
+done
+
+if [[ "$loaded" == "1" ]]; then
+  pid="$(launchctl print "system/$LABEL" 2>/dev/null | awk '/pid =/{print $3; exit}')"
+  log "✓ daemon 已加载 (pid=${pid:-?})"
 else
-  echo "--- /var/log/oc-gui-helper.log ---" >&2
-  tail -20 /var/log/oc-gui-helper.log 2>/dev/null >&2 || true
-  die "daemon 未运行，见上方日志"
+  # 失败诊断要给出**可操作**的信息。
+  # 实测踩过：bootstrap 返回成功但 job 被 launchd 在 exec 前杀掉，
+  # 此时日志文件根本不存在，只说「见上方日志」等于什么都没说。
+  {
+    echo "--- launchctl print system/$LABEL ---"
+    launchctl print "system/$LABEL" 2>&1 | head -20 || true
+    echo
+    echo "--- /var/log/oc-gui-helper.log ---"
+    if [[ -f /var/log/oc-gui-helper.log ]]; then
+      tail -20 /var/log/oc-gui-helper.log
+    else
+      echo "(文件不存在 —— 进程从未被执行。若 bootstrap 成功却如此，"
+      echo "通常是 launchd 拒绝了 plist 中的某个配置项，例如无效的"
+      echo " Sandboxing profile。)"
+    fi
+    echo
+    echo "--- 手工前台运行以看真实错误 ---"
+    echo "  sudo $HELPER_BIN --daemon ${UIDS[*]}"
+  } >&2
+  die "daemon 未运行"
 fi
 
 echo
