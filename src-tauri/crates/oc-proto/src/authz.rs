@@ -267,7 +267,9 @@ pub mod socket_perms {
     pub const PER_USER: u32 = 0o600;
 }
 
-#[cfg(target_os = "windows")]
+/// 全平台编译（不 `#[cfg]`）：这些只是描述 Windows 授权方案的
+/// 字符串常量，在 macOS 上同样值得被测试覆盖。门控会让相关断言
+/// 永远跑不到。
 pub mod pipe_dacl {
     /// 只允许 pipe 属主（当前用户）读写的安全描述符。
     ///
@@ -290,8 +292,16 @@ pub mod pipe_dacl {
 /// - macOS：Mach service + `SecCode` 校验（见 macos-helper）
 pub const ENDPOINT_PREFIX: &str = "helper";
 
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+/// Linux：`/run` 由 tmpfs 挂载，重启即清空。
+#[cfg(target_os = "linux")]
 pub const RUNTIME_DIR: &str = "/run/oc-gui";
+
+/// macOS：**没有 `/run`**。用 `/var/run`（symlink → `/private/var/run`），
+/// 同样是易失目录、重启清空。
+///
+/// ⚠️ 写死 `/run` 会导致 macOS 上 socket 创建失败 —— 该路径不存在。
+#[cfg(target_os = "macos")]
+pub const RUNTIME_DIR: &str = "/var/run/oc-gui";
 
 /// Linux/macOS：每用户 socket 的绝对路径。
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -303,11 +313,21 @@ pub fn per_user_socket_path(uid: u32) -> std::path::PathBuf {
 ///
 /// **不用 `Local\` 前缀**：`Local\` 的命名空间由创建 pipe 的进程
 /// 拥有，SYSTEM 服务创建的 pipe 普通用户连不上。要让普通用户能连
-/// 提权进程创建的 pipe，必须用 `\.\pipe\`（全局命名空间），
+/// 提权进程创建的 pipe，必须用 `\\.\pipe\`（全局命名空间），
 /// 靠 DACL 而不是命名空间来隔离。
-#[cfg(target_os = "windows")]
+///
+/// 全平台编译（同上）：纯字符串拼接，无 Windows API 依赖。
 pub fn per_user_pipe_name(sid_suffix: &str) -> String {
-    format!(r"\.\pipe\OC GUI-{ENDPOINT_PREFIX}-{sid_suffix}")
+    // ⚠️ 前缀必须是 `\\.\pipe\`（设备路径，两个前导反斜杠）。
+    //    少一个就不是合法的 Win32 设备路径。
+    //    实测踩过：这里原本写成 `\.\pipe\`，而测试被
+    //    `#[cfg(target_os = "windows")]` 门控 —— 在 macOS 上跑
+    //    `cargo test` 永远不会执行到它，Windows 交叉检查又只
+    //    `cargo check` 不 `cargo test`，于是这个错误存活了很久。
+    //    现在该测试不再门控（它只测字符串拼接，与平台无关）。
+    //    名字里用 `-` 而不是空格：Win32 允许空格，但不便于
+    //    在 shell/日志里引用。
+    format!(r"\\.\pipe\oc-gui-{ENDPOINT_PREFIX}-{sid_suffix}")
 }
 
 /// 创建/接管每用户 socket。
@@ -495,8 +515,18 @@ mod tests {
     /// 关键安全断言：允许列表永远不能被 argv 影响。
     ///
     /// 若将来有人想「按命令行参数决定授权」，这个测试会挡住。
-    #[cfg(target_os = "windows")]
+    /// 刻意**不加** `#[cfg(target_os = "windows")]`。
+    ///
+    /// 这两段都只是字符串检查，在任何平台都能跑。之前把它们门控到
+    /// Windows，而 macOS 上的 `cargo test` 永远执行不到 ——
+    /// `ci/check-windows.sh` 又只 `cargo check` 不 `cargo test`
+    /// （Windows 二进制在本机跑不起来）。于是「pipe 名前缀少一个
+    /// 反斜杠」这个 bug 从未被任何测试发现。
+    ///
+    /// 教训：**门控测试前先问「这段逻辑真的依赖平台吗」**。
+    /// 纯字符串/纯算术的断言应当全平台跑。
     #[test]
+    #[cfg_attr(windows, allow(dead_code))]
     fn pipe_dacl_only_grants_the_named_sid() {
         // DACL 里出现 Everyone / Administrators 都是权限泄漏
         let s = pipe_dacl::SDDL_TEMPLATE;
@@ -508,12 +538,21 @@ mod tests {
         assert!(s.contains("SY"), "SYSTEM 需要（helper 自身以 SYSTEM 运行）");
     }
 
-    #[cfg(target_os = "windows")]
     #[test]
+    #[cfg_attr(windows, allow(dead_code))]
     fn pipe_name_is_in_global_namespace() {
-        // Local\ 的 pipe 由创建进程拥有，SYSTEM 创建的普通用户连不上
+        // `Local\` 的 pipe 由创建进程拥有，SYSTEM 创建的普通用户连不上，
+        // 因此必须是全局命名空间 `\\.\pipe\`（**两个**前导反斜杠）。
         let n = per_user_pipe_name("S-1-5-21-1-2-3-1001");
-        assert!(n.starts_with(r"\\.\pipe\"), "实际: {n}");
+        // 注意 raw string 里的反斜杠不做转义：`r"\\.\pipe\"` 就是
+        // 「两个前导 + 一个结尾」共 4 个反斜杠的设备路径前缀。
+        // （一开始这里写成 `r"\\.\pipe\\"`，末尾多了一个，测试自己
+        //  先失败了 —— 断言和被测代码同时有错时，只有真正运行能分辨。）
+        assert!(
+            n.starts_with(r"\\.\pipe\"),
+            "Win32 设备路径必须以 \\\\ 开头、\\ 结尾，实际: {n:?}"
+        );
+        assert!(!n.contains(' '), "pipe 名不应含空格: {n:?}");
         assert!(n.contains("1001"), "应含用户标识: {n}");
     }
 

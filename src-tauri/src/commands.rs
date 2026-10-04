@@ -206,11 +206,48 @@ pub struct HelperStatus {
     pub detail: Option<String>,
 }
 
+/// macOS 未安装特权助手时给用户的指引。
+///
+/// 只给文字不给可粘贴命令：安装脚本在源码仓库里，不在 App bundle 内，
+/// 拼不出一个在用户机器上真实存在的路径。
+#[cfg(target_os = "macos")]
+const MACOS_INSTALL_HINT: &str =
+    "在 OC GUI 源码仓库中运行：sudo ./src-tauri/Scripts/install-macos-daemon.sh";
+
 #[tauri::command]
 pub fn helper_status() -> Result<HelperStatus, String> {
-    // ---- macOS：SMAppService 注册状态 ----
+    // ---- macOS：两条通道，先看实际能用的那条 ----
+    //
+    // macOS 上有两条互不依赖的特权通道：
+    //
+    // 1. **LaunchDaemon + Unix socket**（免签名，当前的主路径）
+    //    由 `Scripts/install-macos-daemon.sh` 安装。只要 socket 存在
+    //    就能用，不需要 Developer ID。
+    // 2. **XPC + SMAppService**（需要 Developer ID 签名）
+    //    注册状态由 `macosctl` 查询。
+    //
+    // 判定顺序按「实际能不能连」来，而不是按哪条更现代 —— 否则装了
+    // LaunchDaemon 的用户会看到 UI 报「未就绪」，因为他没买证书。
     #[cfg(target_os = "macos")]
     {
+        let uid = channel::current_uid();
+        let sock = crate::ipc::client::endpoint_for(uid);
+        let socket_ready = std::path::Path::new(&sock).exists();
+
+        if socket_ready {
+            return Ok(HelperStatus {
+                privileged: true,
+                helper_ready: true,
+                helper_installed: true,
+                channel: "socket",
+                message: "特权助手已就绪".into(),
+                message_key: "helper.status.ready",
+                elevate_command: None,
+                detail: Some(sock),
+            });
+        }
+
+        // 没有 socket —— 退到 XPC 路线（可能已签名）
         let state = channel::macos::daemon_state().unwrap_or_else(|_| "unknown".into());
         let registered = state == "registered";
         let (message, message_key) = match state.as_str() {
@@ -237,13 +274,19 @@ pub fn helper_status() -> Result<HelperStatus, String> {
             channel: "xpc",
             message: message.to_string(),
             message_key,
-            // macOS 注册不弹密码框 —— 批准动作在系统设置里做
+            // 未签名时给不出可执行的「一键提权」—— 安装要手动跑脚本。
+            //
+            // ⚠️ 这里**不能**用 `env!("CARGO_MANIFEST_DIR")` 拼路径：
+            // 那是编译机的绝对路径（如 /Users/xxx/work/...），会被烧进
+            // 二进制里，给用户显示一条他机器上根本不存在的命令。
+            // 脚本本身也在源码仓库里、不在 App bundle 内，所以只能给
+            // 文字指引。
             elevate_command: if registered {
                 None
             } else {
-                Some("open -a \"System Settings\"".into())
+                Some(MACOS_INSTALL_HINT.to_string())
             },
-            detail: Some(state),
+            detail: Some(format!("xpc={state} socket={sock}")),
         })
     }
 

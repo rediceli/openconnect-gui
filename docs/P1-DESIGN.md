@@ -947,7 +947,127 @@ vpnc-script 之后就静默进入主循环，不再打任何日志。
 写着「留空则首次连接时弹窗询问，确认后写入」，但这条路径从未被实现
 —— openconnect 的交互式询问无法透传到 GUI。仍待补。
 
-#### 6.3.13 未完成部分
+#### 6.3.13 macOS 免签名特权通道（LaunchDaemon + socket）✅
+
+##### 为什么需要它
+
+**SMAppService 是唯一要求签名的路。** SDK 头文件 `SMAppService.h`
+写得毫不含糊：
+
+> Apps that use SMAppService APIs must be code signed.
+
+未签名返回 `kSMErrorInvalidSignature`。而 Apple 的公证规则又明确排除
+ad-hoc 签名：
+
+> Don't use a Mac Distribution, ad hoc, Apple Developer, or local
+> development certificate.
+
+也就是说走 XPC 就必须买 Developer ID（$99/年）。
+
+**但 Apple 自己在同一个头文件里承认了另一条路：**
+
+> Legacy LaunchDaemons installed in /Library/LaunchDaemons will continue
+> to be bootstrapped without explicit approval in System Settings since
+> writing to /Library is protected with filesystem permissions.
+
+这句话等于承认：**信任边界是 `/Library` 的文件权限，不是签名。**
+能往 `/Library/LaunchDaemons` 写的人就是 root，launchd 不校验签名。
+研究阶段还实测过一个**完全未签名**的脚本能被 `launchctl bootstrap`
+成功加载运行。
+
+##### 顺带发现：macOS 的提权数据通路原本**从未可用过**
+
+排查时发现 `src/channel.rs` 里的 `macos` 模块只被用于
+**注册与状态查询**（`daemon_state` / `register_daemon`），
+数据通路一次都没调用。而 `endpoint_for()` 在 macOS 上返回的是
+**dev 路径** `/tmp/oc-gui-helper-<uid>.sock`，生产环境永远不存在。
+
+于是 `Channel::detect()` 每次都回落到 `Direct` —— 以 GUI 用户身份跑
+openconnect，建不了 tun 设备。**macOS 上「已注册助手」和「能连接」
+是两回事，UI 显示前者可用，实际走的是后者。**
+
+修法就是让 macOS 与 Linux 同款：都用 `per_user_socket_path()`。
+
+##### 授权模型（与 Linux 完全一致）
+
+| | Linux | macOS（本文） | macOS（XPC） |
+|---|---|---|---|
+| 端点 | `/run/oc-gui/helper-<uid>.sock` | `/var/run/oc-gui/helper-<uid>.sock` | Mach service |
+| 授权 | polkit → socket `0600` → uid 复检 | socket `0600` → `getpeereid()` 复检 | `SecCode` 签名 + Team ID |
+| 安装 | `pkexec --authorize <uid>` | `sudo install-macos-daemon.sh` | `SMAppService.register()` |
+| 需要签名 | 否 | **否** | **是** |
+
+uid 列表写在 launchd plist 的 `ProgramArguments` 里 —— 让授权范围成为
+**安装时的一次性决定**。改 plist 需要 sudo，非特权进程无法自行扩权。
+
+⚠️ **能力损失要说清楚**：`getpeereid()` 只给数字 uid/egid，
+**不给 bundle ID、不给 Team ID**。它能证明「这是 uid 501 的进程」，
+不能证明「这是 OC GUI 这个 App」。单用户机器上一般够用（同用户的
+恶意进程本来就能读钥匙串弹窗）。若要求绑定到具体 App，必须用 XPC
+或签名。
+
+两条通道可以共存：有证书走 XPC，没有就降级到 socket。
+`helper_status` 按「实际能不能连」判定优先级 —— 否则装了
+LaunchDaemon 的用户会看到 UI 报「未就绪」，因为他没买证书。
+
+##### `/run` 在 macOS 上不存在
+
+原 `RUNTIME_DIR` 写死 `/run/oc-gui`，那是 Linux 的 tmpfs 路径。
+macOS 要用 `/var/run`（等价于 `/private/var/run`）。已按平台拆分，
+并在注释里标注 —— 否则 socket 创建会直接失败。
+
+##### `/etc/passwd` 在 macOS 上不是权威源
+
+`--all` 分支最初用 `awk -F: '$7 !~ /nologin/' /etc/passwd` 枚举用户，
+在 macOS 上**返回 0 个** —— 用户账号存在 Open Directory 里，
+`/etc/passwd` 只有系统账号。实测 `awk -F: '$1=="lijian"' /etc/passwd`
+什么都没有。改用 `dscl . list /Users UniqueID`。
+
+同一个错误在 Rust 侧也有：`uid_to_name()` 解析 `/etc/passwd`，
+在 macOS 上永远返回 `"?"`，日志里看不到 socket 是给谁建的。改用
+`libc::getpwuid`。
+
+##### bash 3.2
+
+macOS 自带 bash 3.2，没有 `mapfile`/`readarray`（bash 4+）。
+`--all` 分支改用 `for` + 命令替换。另一处踩到的是三层嵌套管道里
+内嵌 `case`，bash 3.2 下引号被吃到打架
+（`syntax error near unexpected token 'done'`）—— 改成扁平结构。
+
+##### 两个被门控测试掩盖的 bug
+
+`pipe_name_is_in_global_namespace` 和 `pipe_dacl_only_grants_the_named_sid`
+都被 `#[cfg(target_os = "windows")]` 门控，而它们测的只是**字符串拼接**，
+在 macOS 上完全能跑。
+
+于是「pipe 名前缀少一个前导反斜杠」（`\.\pipe\` 写成 `\.\pipe\`）
+这个 bug 从未被任何测试发现：macOS 上 `cargo test` 跑不到，
+`ci/check-windows.sh` 又只 `cargo check` 不 `cargo test`
+（Windows 二进制在本机跑不起来）。
+
+解封后立刻见效 —— 测试先因为**我自己写错的断言**而失败：
+
+```
+Win32 设备路径必须有两个前导反斜杠，实际: "\\.\pipe\oc-gui-helper-..."
+```
+
+raw string 里 `r"\\.\pipe\\"` 末尾多了一个反斜杠。
+断言和被测代码同时有错时，**只有真正运行能分辨哪个错**。
+
+教训：**门控测试前先问「这段逻辑真的依赖平台吗」**。纯字符串、
+纯算术的断言应当全平台跑。
+
+##### 已知缺口
+
+- LaunchDaemon 未在真机安装验证（本机 sudo 需密码）。已验证的部分：
+  plist 语法、`launchctl` 域解析、`--serve` 开发模式下的完整数据通路
+  （socket 创建 → peer credentials → 授权 → 协议握手 → 启动 openconnect）
+- helper 未随 App bundle 分发 —— 需从源码仓库跑安装脚本。
+  `elevate_command` 因此只能给文字指引；用 `env!("CARGO_MANIFEST_DIR")`
+  拼路径会把编译机绝对路径烧进二进制，给用户显示一条不存在的命令。
+- `--all` 未考虑 OD 里的域用户
+
+#### 6.3.14 未完成部分
 
 | 项 | 状态 | 阻塞原因 |
 |---|---|---|
@@ -959,7 +1079,9 @@ vpnc-script 之后就静默进入主循环，不再打任何日志。
 | Windows openconnect spawn | ❌ 待写 | 同上 |
 | ~~自签证书的 GUI 确认弹窗~~ | ✅ 已实现（§6.4） | 无 |
 | 企业 CA 证书（`ca_file`）的 UI 入口 | ❌ 无入口 | 后端字段已就绪，但 UI 未暴露选择器；企业环境（内部 CA 签发）比自签更常见 |
-| GUI 端到端（macOS） | 🔶 隧道侧已验证 | 特权通道需 Developer ID 签名（`SMAppService`） |
+| GUI 端到端（macOS） | 🔶 隧道已验证；socket 通道待装机 | 需 `sudo Scripts/install-macos-daemon.sh`（免签名） |
+| LaunchDaemon 真机验证 | 🔶 代码+脚本齐备 | 本机 sudo 需密码；`--serve` 模式已验证数据通路 |
+| helper 随 App 分发 | ❌ 未做 | 当前需从源码仓库跑安装脚本；应改为打包进 `Contents/Library/` + `postinstall` |
 
 ### 6.4 其他
 

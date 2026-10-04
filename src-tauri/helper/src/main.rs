@@ -51,6 +51,9 @@ fn main() {
             };
             authorize_and_serve(uid)
         }
+        // macOS LaunchDaemon 入口：由 launchd 以 root 拉起，
+        // uid 列表在安装时写进 plist 的 ProgramArguments。
+        Some("--daemon") => daemon(args.get(2..).unwrap_or(&[])),
         _ => usage(),
     }
 }
@@ -64,6 +67,7 @@ fn main() {
 /// 授权结果直接编码在文件系统权限里：
 /// - 没通过 polkit ⇒ 根本没这个文件
 /// - 通过了 polkit 的 uid ⇒ 只有它能打开
+///
 /// 不存在「先连上再被拒」的中间态，也不存在白名单变更后的残留。
 ///
 /// # 为什么还要再查一遍 uid
@@ -97,6 +101,117 @@ fn authorize_and_serve(target_uid: u32) {
     };
 
     serve_listener(listener, target_uid, &path);
+}
+
+/// macOS LaunchDaemon 入口：为每个授权 uid 建立一个每用户 socket，
+/// 然后并发服务。
+///
+/// # 为什么需要这个入口（而不是复用 `--authorize`）
+///
+/// `--authorize` 是 Linux/polkit 模型：GUI 弹一次密码框，pkexec 带
+/// uid 拉起一个常驻进程。macOS 上没有 polkit，而 SMAppService 又要求
+/// 代码签名（见 P1-DESIGN §6.5），于是免签名的路子只剩
+/// **LaunchDaemon**：安装脚本用一次管理员密码把 plist 装进
+/// `/Library/LaunchDaemons`，之后 launchd 在开机时以 root 拉起本进程。
+///
+/// # 授权模型与 Linux 完全一致
+///
+/// 每个授权 uid 一个 socket，`0600` + 属主该 uid。授权结果直接编码
+/// 在文件系统权限里，不存在「先连上再被拒」的中间态；再加上
+/// `getpeereid()` 运行时复检（`peer_credentials`）作为第二道防线。
+///
+/// # 为什么 uid 列表放在 plist 参数里
+///
+/// 让授权范围成为**安装时的一次性决定**，而不是运行期可改的状态。
+/// 想换用户就重新跑安装脚本 —— 改一个 root 拥有的 plist 需要 sudo，
+/// 非特权进程无法自行扩权。
+fn daemon(uid_args: &[String]) -> ! {
+    let self_uid = unsafe { libc::geteuid() };
+    if self_uid != 0 {
+        eprintln!("拒绝启动：必须以 root 运行（当前 euid={self_uid}）");
+        std::process::exit(2);
+    }
+
+    let uids: Vec<u32> = uid_args
+        .iter()
+        .filter_map(|a| a.parse::<u32>().ok())
+        .filter(|u| *u != 0)
+        .collect();
+    if uids.is_empty() {
+        eprintln!("--daemon 需要至少一个非 0 的 uid 参数");
+        std::process::exit(2);
+    }
+    // 去重但保持顺序，便于日志阅读
+    let mut seen = std::collections::BTreeSet::new();
+    let uids: Vec<u32> = uids.into_iter().filter(|u| seen.insert(*u)).collect();
+
+    // 反向解析各 uid 的用户名，仅用于日志 —— 让运维一眼看出
+    // 「这个 socket 是给谁的」，排查权限问题省很多时间。
+    for uid in &uids {
+        let name = uid_to_name(*uid);
+        eprintln!("helper: 为 uid={uid} ({name}) 建立 socket");
+    }
+
+    let mut handles = Vec::new();
+    for uid in &uids {
+        let path = per_user_socket_path(*uid);
+        let listener = match create_per_user_socket(*uid) {
+            Ok(l) => l,
+            Err(e) => {
+                // 单个 uid 失败不应让整个 daemon 退出，否则一个陈旧
+                // uid（比如用户被删除）会拖垮其他所有用户的连接。
+                eprintln!("创建 {} 失败，跳过该 uid: {e}", path.display());
+                continue;
+            }
+        };
+        eprintln!("helper ready: {}", path.display());
+
+        let uid = *uid;
+        handles.push(std::thread::spawn(move || {
+            let self_uid = unsafe { libc::geteuid() };
+            let allowed = vec![uid];
+            let _ = serve_listener_with(listener, self_uid, allowed, false);
+            eprintln!("helper: uid={uid} 的 listener 结束");
+        }));
+    }
+
+    if handles.is_empty() {
+        eprintln!("没有一个 socket 建立成功，退出");
+        std::process::exit(1);
+    }
+
+    // launchd 的 KeepAlive 会负责重启；这里只需阻塞住。
+    for h in handles {
+        let _ = h.join();
+    }
+    std::process::exit(0);
+}
+
+/// uid → 用户名，仅用于日志。
+///
+/// # 为什么用 `getpwuid` 而不是读 `/etc/passwd`
+///
+/// **macOS 上 `/etc/passwd` 不是权威源。** 用户账号存在 Open Directory
+/// （dscacheutil）里，`/etc/passwd` 只有系统账号 —— 实测
+/// `awk -F: '$1=="lijian"' /etc/passwd` 什么都没有。
+///
+/// 早期实现解析 `/etc/passwd`，在 macOS 上永远返回 `"?"`，日志里
+/// 看不到是给谁建的 socket，排查权限问题很痛苦。
+///
+/// `getpwuid` 走的是系统自己的 NSS，Linux 与 macOS 都正确。
+/// 线程安全性：`getpwuid` 返回的静态缓冲区可能被并发调用覆盖，
+/// 所以拿到指针后立刻拷贝成 `String`，不跨语句持有。
+#[cfg(unix)]
+fn uid_to_name(uid: u32) -> String {
+    unsafe {
+        let pw = libc::getpwuid(uid);
+        if pw.is_null() || (*pw).pw_name.is_null() {
+            return "?".into();
+        }
+        std::ffi::CStr::from_ptr((*pw).pw_name)
+            .to_string_lossy()
+            .into_owned()
+    }
 }
 
 /// 开发模式：直接在给定路径监听。
@@ -329,10 +444,10 @@ fn handle(stream: UnixStream, slot: &SessionSlot) {
     //
     // 只有所有者这么做 —— 第二条连接（GUI 的 disconnect 用的那条）
     // 正常关闭时**不能**停掉别人的隧道。
-    if owns_session {
-        if let Some(s) = slot.lock().unwrap_or_else(|e| e.into_inner()).take() {
-            s.stop.store(true, std::sync::atomic::Ordering::SeqCst);
-        }
+    if owns_session
+        && let Some(s) = slot.lock().unwrap_or_else(|e| e.into_inner()).take()
+    {
+        s.stop.store(true, std::sync::atomic::Ordering::SeqCst);
     }
 }
 
@@ -340,11 +455,11 @@ fn handle(stream: UnixStream, slot: &SessionSlot) {
 ///
 /// 不持锁写多行：每条都是独立的一行 JSON，客户端按行读。
 fn send(w: &Writer, resp: Response) {
-    if let Ok(mut out) = w.lock() {
-        if let Ok(s) = serde_json::to_string(&resp) {
-            let _ = writeln!(out, "{s}");
-            let _ = out.flush();
-        }
+    if let Ok(mut out) = w.lock()
+        && let Ok(s) = serde_json::to_string(&resp)
+    {
+        let _ = writeln!(out, "{s}");
+        let _ = out.flush();
     }
 }
 

@@ -91,10 +91,19 @@ pub fn endpoint_for(uid: u32) -> String {
         crate::ipc::pipe::pipe_name_for_current_user()
             .unwrap_or_else(|_| crate::ipc::authz::per_user_pipe_name("unknown"))
     }
-    // macOS 上生产部署用 XPC，不走 socket。这里保留 dev 路径以便本地测试。
+    // macOS：与 Linux 同款 —— LaunchDaemon 在 `/var/run/oc-gui/` 下
+    // 为每个授权 uid 建 socket，0600 属主该 uid。
+    //
+    // 此前这里返回 dev 路径（`/tmp/oc-gui-helper-<uid>.sock`），
+    // 于是生产环境下 `Channel::detect` 永远连不上 helper，直接
+    // 回落 `Direct` —— 而 Direct 以 GUI 用户身份跑 openconnect，
+    // 建不了 tun 设备。**macOS 的提权数据通路实际上从未可用过。**
+    //
+    // XPC（`SMAppService`）路线仍然是备选，但它要求代码签名；
+    // 本 socket 路线不需要任何签名。见 P1-DESIGN §6.5。
     #[cfg(target_os = "macos")]
     {
-        dev_socket_path(uid).display().to_string()
+        crate::ipc::authz::per_user_socket_path(uid).display().to_string()
     }
 }
 

@@ -9,7 +9,8 @@
 
 - **三平台特权通道** —— 提权逻辑各自落地，而不是靠 sudo/pkexec 一套通吃
   - Linux：polkit + 每用户 socket（`0600`）+ 运行时 uid 复检
-  - macOS：XPC daemon + `SMAppService` 注册 + 调用方签名/Team ID 双向校验
+  - macOS：**免签名** —— LaunchDaemon + 每用户 socket（主路径）；
+    另可选 XPC + `SMAppService`，需要 Developer ID 证书
   - Windows：named pipe + DACL（只放行当前用户 SID + SYSTEM）
 - **凭据不进 argv** —— 密码与 cookie 一律走 `--passwd-on-stdin`；私钥口令经 `0600` 配置文件
 - **服务器证书 TOFU** —— 首次连接展示证书指纹供确认，之后精确 pin 匹配
@@ -24,9 +25,23 @@ cargo tauri dev                   # 开发
 cargo tauri build --bundles app   # 打包 macOS .app
 ```
 
-连接需要管理员权限（创建 tun 设备）。macOS 的正常路径走已签名的
-privileged helper；未签名时开发用 `sudo Scripts/macos-tunnel-test.sh <account.txt>`
-手工验证隧道。
+连接需要管理员权限（创建 tun 设备）。**macOS 不需要代码签名**：
+
+```bash
+sudo ./src-tauri/Scripts/install-macos-daemon.sh   # 授权当前用户
+sudo ./src-tauri/Scripts/uninstall-macos-daemon.sh # 卸载
+```
+
+Linux 用 polkit（`pkexec`，在 GUI 里点「提权启动」触发）。
+两条路的授权模型一致：每个授权 uid 一个 socket，权限 `0600` +
+属主该 uid，再加运行时 uid 复检。详见
+[设计文档 §6.3.13](docs/P1-DESIGN.md)。
+
+想只验证隧道而不安装助手：
+
+```bash
+sudo ./src-tauri/Scripts/macos-tunnel-test.sh <account.txt>
+```
 
 ## 仓库结构
 
