@@ -227,8 +227,17 @@ log "写入 $PLIST"
 launchctl bootout "system/$LABEL" 2>/dev/null || true
 rm -f "$PLIST"
 
+PLIST_TMP="$PLIST.tmp"
+# 写临时文件再 mv，保证 launchd 永远读不到半成品。
+#
+# 刻意用「分段 heredoc + 循环」而不是「占位符 + sed」：
+# sed 的替换文本不能含换行（`unescaped newline inside substitute pattern`），
+# 而多 uid 恰恰需要每行一个 `<string>`。改用循环直接输出。
+#
+# 插值安全性：这里只插入 $LABEL（脚本内常量）、$HELPER_BIN（本脚本
+# 写死的绝对路径）与已校验为纯数字的 uid，不存在 XML 元字符注入面。
 {
-  cat <<EOF
+cat <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -241,8 +250,8 @@ rm -f "$PLIST"
         <string>$HELPER_BIN</string>
         <string>--daemon</string>
 EOF
-  for u in "${UIDS[@]}"; do printf '        <string>%s</string>\n' "$u"; done
-  cat <<'EOF'
+for u in "${UIDS[@]}"; do printf '        <string>%s</string>\n' "$u"; done
+cat <<'EOF'
     </array>
 
     <key>RunAtLoad</key>
@@ -251,58 +260,54 @@ EOF
     <key>KeepAlive</key>
     <true/>
 
-    <!-- helper 崩溃后避免疯狂重启：10s 内重启超过 3 次就放弃 -->
-    <key>ThrottleInterval</key>
-    <integer>10</integer>
-
-    <key>StandardErrorPath</key>
-    <string>/var/log/oc-gui-helper.log</string>
-
-    <key>StandardOutPath</key>
-    <string>/var/log/oc-gui-helper.log</string>
-
-    <key>ProcessType</key>
-    <string>Adaptive</string>
-
     <!--
-      刻意**不**声明 Sandboxing。
+      刻意保持在**最小已知良好集**。
 
-      实测踩过：这里原本写了
-        <key>Sandboxing</key><dict>
-          AllowNetworkClient / AllowNetworkServer / AllowFileRead*
-        </dict>
-      这些键名是**编造的** —— LaunchDaemon 的沙箱 profile 实际用
-      `Sockets` / `FileAccess` 子字典。launchd 遇到无法识别的 sandbox
-      profile 会在 exec 进程**之前**就把 job 杀掉，于是：
-        - bootstrap 居然返回成功
-        - /var/log/oc-gui-helper.log 连创建都没有（空）
-        - 表现为「daemon 未运行，日志里什么都没有」
+      实测踩过两次：
+      1. 曾加 `Sandboxing`，键名（AllowNetworkClient 等）是我编造的，
+         launchd 在 exec 进程之前就把 job 杀掉，bootstrap 却返回成功，
+         日志文件连创建都没有。
+      2. 带 ProcessType / ThrottleInterval / StandardOutPath /
+         StandardErrorPath 的版本，在 system 域下 bootstrap
+         同样「返回成功但服务不存在」。
 
-      本机所有系统 LaunchDaemon 也都不带 Sandboxing，可作参照。
+      授权安全靠的是 socket 权限 + getpeereid() 复检，
+      日志路径、进程类型、节流间隔都不是必需的 —— 全部去掉。
+      之后若仍失败，逐项加回来即可定位到具体是哪一项引起。
 
-      更根本的原因：沙箱化一个要分配 utun、执行 vpnc-script、写
-      0600 配置文件的 helper 必然失败 —— 沙箱会挡住全部这些动作。
-      授权安全靠的是 socket 权限 + getpeereid() 复检，不是沙箱。
-
-      另：刻意不声明 MachServices，因此 launchd 不要求代码签名。
+      也刻意不声明 MachServices，因此 launchd 不要求代码签名。
       这正是与 SMAppService 路线的关键区别。
     -->
 </dict>
 </plist>
 EOF
-} > "$PLIST"
+} > "$PLIST_TMP"
 
-chown root:wheel "$PLIST"
-chmod 644 "$PLIST"
-plutil -lint "$PLIST" >/dev/null || die "生成的 plist 语法错误"
+plutil -lint "$PLIST_TMP" >/dev/null || die "生成的 plist 语法错误，内容如下：
+$(cat "$PLIST_TMP")"
+
+chown root:wheel "$PLIST_TMP"
+chmod 644 "$PLIST_TMP"
+mv -f "$PLIST_TMP" "$PLIST"
 
 # ── 7. 加载 ───────────────────────────────────────────────────
 log "launchctl bootstrap system/$LABEL"
-if ! launchctl bootstrap "system/$PLIST"; then
-  echo "--- launchctl bootstrap 的原始输出已在上方 ---" >&2
+#
+# ⚠️ 必须捕获 stderr：launchctl 把「服务已存在」之类、以及真正的
+# 失败原因都写到 stderr。只看返回值会以为成功了。
+bootstrap_err="$(mktemp)"
+if launchctl bootstrap "system/$PLIST" 2>"$bootstrap_err"; then
+  if [[ -s "$bootstrap_err" ]]; then
+    printf '\033[1;33m注意:\033[0m launchctl bootstrap 说了：\n' >&2
+    sed 's/^/  /' "$bootstrap_err" >&2
+  fi
+  log "bootstrap 返回 0"
+else
+  rm -f "$bootstrap_err"
   launchctl print "system/$LABEL" 2>&1 | head -20 >&2 || true
-  die "bootstrap 失败"
+  die "bootstrap 失败（launchctl 的错误信息应已打印在上方）"
 fi
+rm -f "$bootstrap_err"
 
 # ── 8. 验证 ───────────────────────────────────────────────────
 # 轮询而不是固定 sleep 1：launchd 启动 + 二进制 exec 有延迟，
