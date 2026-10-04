@@ -329,17 +329,20 @@ else
     echo "--- launchctl print system/$LABEL ---"
     launchctl print "system/$LABEL" 2>&1 | head -20 || true
     echo
-    echo "--- /var/log/oc-gui-helper.log ---"
-    if [[ -f /var/log/oc-gui-helper.log ]]; then
-      tail -20 /var/log/oc-gui-helper.log
-    else
-      echo "(文件不存在 —— 进程从未被执行。若 bootstrap 成功却如此，"
-      echo "通常是 launchd 拒绝了 plist 中的某个配置项，例如无效的"
-      echo " Sandboxing profile。)"
-    fi
-    echo
-    echo "--- 手工前台运行以看真实错误 ---"
+    echo "--- 手工前台运行以看真实错误（最重要的一步）---"
     echo "  sudo $HELPER_BIN --daemon ${UIDS[*]}"
+    echo
+    echo "  这一步会直接打印 helper 自己的错误（比如 socket 创建失败、"
+    echo "  uid 列表为空），是唯一能看到真实原因的地方。"
+    echo
+    echo "--- plist 解析结果 ---"
+    plutil -p "$PLIST" 2>&1 | sed 's/^/  /'
+    echo
+    echo "--- launchd 的拒绝记录（系统日志，通常直接写着原因）---"
+    echo "  sudo log show --last 5m --predicate 'process == \"launchd\"' | grep -i ${LABEL##*.} | tail -20"
+    echo
+    echo "  典型内容形如 'unknown service' / 'invalid program' /"
+    echo "  'code signature invalid'，直接指向被拒的原因。"
   } >&2
   die "daemon 未运行"
 fi
@@ -360,7 +363,7 @@ done
 echo
 if [[ "$ok" == "1" ]]; then
   printf '\033[1;32m安装完成。\033[0m 现在可以启动 OC GUI 连接 VPN 了。\n'
-  printf '日志：tail -f /var/log/oc-gui-helper.log\n'
+  printf '诊断：sudo launchctl print system/%s\n' "$LABEL"
 else
   die "部分 socket 缺失，见上方"
 fi

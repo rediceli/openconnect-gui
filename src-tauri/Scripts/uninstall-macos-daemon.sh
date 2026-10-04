@@ -48,4 +48,5 @@ if launchctl print "system/$LABEL" >/dev/null 2>&1; then
   die "卸载后 daemon 仍在运行，请手动检查"
 fi
 printf '\033[1;32m卸载完成。\033[0m 用户 profile 与钥匙串条目未改动。\n'
-printf '提示：日志文件 /var/log/oc-gui-helper.log 未删除，可按需手动清理。\n'
+printf '提示：plist 不再配置 StandardOutPath，故不产生日志文件；\n'
+printf '      如有残留的 /var/log/oc-gui-helper.log 可手动删除。\n'
