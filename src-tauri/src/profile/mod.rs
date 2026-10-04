@@ -12,22 +12,51 @@ use std::path::{Path, PathBuf};
 
 /// openconnect 支持的协议。取值与 `--protocol=` 的参数完全一致。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
+// ⚠️ 刻意**不用** `rename_all = "kebab-case"`。
+//
+// 它会把 `AnyConnect` 序列化成 `"any-connect"`，而 openconnect 的
+// `--protocol=` 实际值是 `"anyconnect"`（无连字符）。于是同一个概念
+// 出现两种字符串：serde 一种、`as_arg()` 另一种。
+//
+// 后果是实测出来的：前端按 openconnect 的写法硬编码
+// `protocol: "anyconnect"`，Rust 直接拒绝 ——
+//   unknown variant `anyconnect`, expected one of `any-connect`, ...
+//
+// 这里给每个变体显式改名成 **openconnect 真正接受的值**，让序列化
+// 与 `as_arg()` 收敛成唯一一种表示。`protocol_serde_matches_openconnect_arg`
+// 这个测试会锁住该不变量。
 pub enum Protocol {
     /// Cisco ASA / ocserv（默认）
     #[default]
+    #[serde(rename = "anyconnect")]
+    // 兼容旧版本写下的 kebab-case 值。
+    //
+    // 曾用 `rename_all = "kebab-case"`，序列化成 "any-connect"。
+    // 若只改读侧不加 alias，已保存的 profile 会变成**无法解析** ——
+    // 而 `load()` 对解析失败是 `unwrap_or_default()`，于是整个
+    // profile 库被静默清空，用户看到列表空掉却不知原因。
+    // 实测踩过：改完协议名后所有 profile 消失。
+    //
+    // alias 只影响读，写出去始终是规范形式 "anyconnect"。
+    #[serde(alias = "any-connect")]
     AnyConnect,
     /// Juniper Network Connect
+    #[serde(rename = "nc")]
     Nc,
     /// Palo Alto Networks GlobalProtect
+    #[serde(rename = "gp")]
     Gp,
     /// Pulse Connect Secure / Ivanti
+    #[serde(rename = "pulse")]
     Pulse,
     /// F5 BIG-IP
+    #[serde(rename = "f5")]
     F5,
     /// Fortinet FortiGate
+    #[serde(rename = "fortinet")]
     Fortinet,
     /// Array Networks
+    #[serde(rename = "array")]
     Array,
 }
 
@@ -297,14 +326,80 @@ impl Repo {
         self.dir.join("profiles.toml")
     }
 
+    /// 读取档案库。
+    ///
+    /// # 解析失败时为什么要备份而不是直接返回空
+    ///
+    /// 这里的容错策略是「读不出来就当空的」，它避免了一个坏文件让
+    /// App 整个打不开。**但代价是静默丢数据**：实测踩过 ——
+    /// `Protocol` 的序列化形式从 `any-connect` 改成 `anyconnect` 后，
+    /// 旧 profile 变成无法解析，`unwrap_or_default()` 于是把**整个库**
+    /// 变成空。用户看到的只是「列表空掉了」，既不知道原因，也可能
+    /// 在下一次保存时把原数据覆盖掉。
+    ///
+    /// 所以解析失败时先把原文件另存为 `profiles.toml.corrupt-<n>`，
+    /// 既保持 App 可用，又不销毁用户的配置。
     pub fn load(&self) -> std::io::Result<Store> {
         let p = self.path();
         if !p.exists() {
             return Ok(Store::default());
         }
         let text = std::fs::read_to_string(&p)?;
-        // 未知字段不应导致整个库读不出来
-        Ok(toml::from_str(&text).unwrap_or_default())
+        match toml::from_str::<Store>(&text) {
+            Ok(store) => Ok(store),
+            Err(e) => {
+                self.backup_corrupt(&text, &e);
+                // 未知字段不应导致整个库读不出来；整库解析失败时
+                // 逐条抢救，避免因一条坏数据丢掉全部 profile
+                Ok(Self::salvage(&text))
+            }
+        }
+    }
+
+    /// 逐条抢救：整库解析失败时，尽量只丢掉真正坏掉的那几条。
+    ///
+    /// 为什么需要：库里往往只有一条因为字段改名/枚举值变更而失效，
+    /// 其余完全正常。直接返回空库等于「因为一条坏数据丢了全部」。
+    ///
+    /// 做法是把 TOML 当作通用值读进来，逐个元素单独反序列化。
+    fn salvage(text: &str) -> Store {
+        let mut out = Store::default();
+        let Ok(doc) = text.parse::<toml::Table>() else {
+            return out;
+        };
+        let Some(arr) = doc.get("profiles").and_then(|v| v.as_array()) else {
+            return out;
+        };
+        for item in arr {
+            match item.clone().try_into::<Profile>() {
+                Ok(p) => out.profiles.push(p),
+                Err(e) => log::warn!("跳过无法解析的 profile（{}）: {e}", item),
+            }
+        }
+        if !out.profiles.is_empty() {
+            log::warn!("已从损坏的档案库中抢救出 {} 条 profile", out.profiles.len());
+        }
+        out
+    }
+
+    /// 解析失败时把原文另存一份，并尽力恢复出能读的部分。
+    ///
+    /// 先尝试「逐条丢弃坏 profile」而不是全盘放弃：库里往往只有一条
+    /// 因为字段改名而失效，其余应当保留。
+    fn backup_corrupt(&self, text: &str, err: &toml::de::Error) {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        let backup = self.dir.join(format!("profiles.toml.corrupt-{stamp}"));
+        if let Err(e) = std::fs::write(&backup, text) {
+            log::warn!("备份损坏的 profiles.toml 失败: {e}");
+        } else {
+            log::error!(
+                "profiles.toml 解析失败，已备份到 {}（原因：{err}）",
+                backup.display()
+            );
+        }
     }
 
     pub fn save(&self, store: &Store) -> std::io::Result<()> {
@@ -328,6 +423,47 @@ fn write_atomic(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    /// serde 的序列化形式必须**等于** `as_arg()`。
+    ///
+    /// 两者一旦分叉，前端按 openconnect 的写法硬编码协议名就会被
+    /// Rust 拒掉：`unknown variant 'anyconnect', expected one of
+    /// 'any-connect', ...`。实测踩过。
+    #[test]
+    fn protocol_serde_matches_openconnect_arg() {
+        for p in [
+            Protocol::AnyConnect,
+            Protocol::Nc,
+            Protocol::Gp,
+            Protocol::Pulse,
+            Protocol::F5,
+            Protocol::Fortinet,
+            Protocol::Array,
+        ] {
+            let json = serde_json::to_string(&p).unwrap();
+            assert_eq!(
+                json,
+                format!("\"{}\"", p.as_arg()),
+                "{p:?} 的 serde 形式应与 as_arg() 一致"
+            );
+            let back: Protocol = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, p, "{p:?} 往返失败");
+        }
+    }
+
+    /// 显式锁住 AnyConnect 这个具体值。
+    ///
+    /// 上面的测试是「serde == as_arg()」，但若有人同时改了两边
+    /// （比如「顺手」把 as_arg 也改成 any-connect），测试仍会通过，
+    /// 而 openconnect 会拒绝。所以这里把真实值钉住。
+    #[test]
+    fn anyconnect_arg_is_the_value_openconnect_expects() {
+        assert_eq!(Protocol::AnyConnect.as_arg(), "anyconnect");
+        assert_eq!(
+            serde_json::to_string(&Protocol::AnyConnect).unwrap(),
+            "\"anyconnect\""
+        );
+    }
+
     use super::*;
 
     fn tmpdir(name: &str) -> PathBuf {
@@ -394,6 +530,70 @@ mod tests {
     fn missing_file_loads_empty_store() {
         let repo = Repo::new(tmpdir("missing"));
         assert_eq!(repo.load().unwrap().profiles.len(), 0);
+    }
+
+    /// 一条坏 profile 不能连带丢掉其余的。
+    ///
+    /// 实测踩过：`Protocol` 序列化形式改动后，旧值让整库解析失败，
+    /// 而 `load()` 原本 `unwrap_or_default()` 返回空库 —— 用户所有
+    /// 连接一起消失，且毫无提示。
+    #[test]
+    fn one_bad_profile_does_not_take_the_others_with_it() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let repo = Repo::new(dir.path());
+        std::fs::write(
+            dir.path().join("profiles.toml"),
+            r#"
+[[profiles]]
+id = "good-1"
+name = "好的一条"
+server = "vpn.corp.com"
+
+[[profiles]]
+id = "bad"
+name = "坏的"
+server = "vpn.corp.com"
+protocol = "不存在的协议"
+
+[[profiles]]
+id = "good-2"
+name = "另一条好的"
+server = "vpn.other.com"
+"#,
+        )
+        .unwrap();
+        let store = repo.load().unwrap();
+        let ids: Vec<&str> = store.profiles.iter().map(|p| p.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["good-1", "good-2"],
+            "应保留两条可解析的 profile"
+        );
+        // 原始文件必须被备份，不能销毁用户数据
+        let backups: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains("corrupt"))
+            .collect();
+        assert_eq!(backups.len(), 1, "损坏的原文应被备份一份");
+    }
+
+    /// 旧版本写入的 `any-connect` 必须仍能读出来。
+    ///
+    /// 改协议名的教训：若不加 `serde(alias)`，已保存的 profile 直接
+    /// 变成不可解析。
+    #[test]
+    fn legacy_kebab_case_protocol_is_still_readable() {
+        let p: Profile = toml::from_str(
+            r#"
+id = "x"
+name = "x"
+server = "vpn.corp.com"
+protocol = "any-connect"
+"#,
+        )
+        .expect("旧的 any-connect 应仍可解析");
+        assert_eq!(p.protocol, Protocol::AnyConnect);
     }
 
     #[test]
