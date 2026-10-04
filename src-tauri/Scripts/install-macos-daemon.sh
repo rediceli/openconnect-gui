@@ -302,18 +302,29 @@ if launchctl bootstrap "system/$PLIST" 2>"$bootstrap_err"; then
     sed 's/^/  /' "$bootstrap_err" >&2
   fi
   log "bootstrap 返回 0"
+  # 返回 0 但服务不存在的情况实测遇到过。加一道二次确认：
+  # 若 stderr 有内容，或紧接着就查不到服务，说明这次 bootstrap
+  # 其实没生效 —— 直接明确报出来，不要混到后面的验证里。
+  if ! launchctl print "system/$LABEL" >/dev/null 2>&1; then
+    log "但 bootstrap 后立刻查不到该服务 —— 这次 bootstrap 未生效"
+    bootstrap_ok=0
+  else
+    bootstrap_ok=1
+  fi
 else
+  sed 's/^/  /' "$bootstrap_err" >&2
   rm -f "$bootstrap_err"
   launchctl print "system/$LABEL" 2>&1 | head -20 >&2 || true
-  die "bootstrap 失败（launchctl 的错误信息应已打印在上方）"
+  die "bootstrap 失败（launchctl 的错误信息已打印在上方）"
 fi
 rm -f "$bootstrap_err"
 
 # ── 8. 验证 ───────────────────────────────────────────────────
 # 轮询而不是固定 sleep 1：launchd 启动 + 二进制 exec 有延迟，
 # 睡 1 秒可能只是还没起来，会误报失败。
-loaded=0
+loaded="$bootstrap_ok"
 for _ in $(seq 1 20); do
+  [[ "$loaded" == "1" ]] && break
   if launchctl print "system/$LABEL" >/dev/null 2>&1; then loaded=1; break; fi
   sleep 0.5
 done
@@ -329,17 +340,43 @@ else
     echo "--- launchctl print system/$LABEL ---"
     launchctl print "system/$LABEL" 2>&1 | head -20 || true
     echo
-    echo "--- 手工前台运行以看真实错误（最重要的一步）---"
-    echo "  sudo $HELPER_BIN --daemon ${UIDS[*]}"
-    echo
-    echo "  这一步会直接打印 helper 自己的错误（比如 socket 创建失败、"
-    echo "  uid 列表为空），是唯一能看到真实原因的地方。"
+    echo "--- 自动前台复现（脚本代跑，不需要你手动执行）---"
+    # 到这一步我们已经确认 launchd 没有把 job 跑起来。与其让用户
+    # 再手动敲一遍命令，不如直接以 root 前台运行同一个二进制 ——
+    # 它会打印真实原因（socket 创建失败 / uid 解析失败 / 权限问题）。
+    #
+    # 用后台 + sleep + kill 实现超时，因为 macOS 自带 bash 3.2
+    # 且没有 GNU coreutils 的 `timeout`。
+    diag_out="$(mktemp)"
+    "$HELPER_BIN" --daemon "${UIDS[@]}" >"$diag_out" 2>&1 &
+    diag_pid=$!
+    for _ in $(seq 1 10); do
+      kill -0 "$diag_pid" 2>/dev/null || break
+      sleep 0.5
+    done
+    if kill -0 "$diag_pid" 2>/dev/null; then
+      # 还活着 = 二进制本身没问题，socket 也建起来了。杀掉以免
+      # 它与 launchd 抢同一个 socket 路径。
+      kill -TERM "$diag_pid" 2>/dev/null
+      sleep 1
+      kill -KILL "$diag_pid" 2>/dev/null
+      wait "$diag_pid" 2>/dev/null || true
+      echo "  二进制**能**以 root 运行（存活 5s 未退出）→"
+      echo "  helper 本身没问题，是 launchd 拒绝加载这个 job。"
+    else
+      wait "$diag_pid" 2>/dev/null
+      echo "  二进制退出码=$?，输出："
+    fi
+    sed 's/^/    /' "$diag_out"
+    rm -f "$diag_out"
+
     echo
     echo "--- plist 解析结果 ---"
     plutil -p "$PLIST" 2>&1 | sed 's/^/  /'
+
     echo
     echo "--- launchd 的拒绝记录（系统日志，通常直接写着原因）---"
-    echo "  sudo log show --last 5m --predicate 'process == \"launchd\"' | grep -i ${LABEL##*.} | tail -20"
+    echo "  sudo log show --last 5m --predicate 'process == \"launchd\"' | grep -i helper | tail -20"
     echo
     echo "  典型内容形如 'unknown service' / 'invalid program' /"
     echo "  'code signature invalid'，直接指向被拒的原因。"
