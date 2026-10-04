@@ -1,10 +1,10 @@
 #!/bin/sh
-# 安装 WthinkVPN 特权 helper（Linux）
+# 安装 OC GUI 特权 helper（Linux）
 #
 # 做四件事：
 #   1. 复制 helper 到 /usr/libexec/
 #   2. 安装 polkit .policy 到 /usr/share/polkit-1/actions/
-#   3. 创建 /run/wthinkvpn 目录（systemd-tmpfiles 优先）
+#   3. 创建 /run/oc-gui 目录（systemd-tmpfiles 优先）
 #   4. 校验：pkaction 能列出 action，helper --selftest 通过
 #
 # 用法：
@@ -21,16 +21,16 @@
 set -eu
 
 PREFIX="${PREFIX:-/usr}"
-LIBEXEC="$PREFIX/libexec/wthinkvpn-helper"
+LIBEXEC="$PREFIX/libexec/oc-gui-helper"
 POLKIT_DIR="$PREFIX/share/polkit-1/actions"
-POLKIT_FILE="$POLKIT_DIR/org.wthink.wthinkvpn-helper.policy"
-RUNTIME_DIR="/run/wthinkvpn"
-HELPER_ACTION="org.wthink.wthinkvpn-helper"
+POLKIT_FILE="$POLKIT_DIR/org.github.rediceli.ocgui-helper.policy"
+RUNTIME_DIR="/run/oc-gui"
+HELPER_ACTION="org.github.rediceli.ocgui-helper"
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-SRC_HELPER="$HERE/target/release/wthinkvpn-helper"
-[ -x "$SRC_HELPER" ] || SRC_HELPER="$HERE/../target/release/wthinkvpn-helper"
-POLKIT_SRC="$HERE/polkit/org.wthink.wthinkvpn-helper.policy"
+SRC_HELPER="$HERE/target/release/oc-gui-helper"
+[ -x "$SRC_HELPER" ] || SRC_HELPER="$HERE/../target/release/oc-gui-helper"
+POLKIT_SRC="$HERE/polkit/org.github.rediceli.ocgui-helper.policy"
 
 DRY=0
 UNINSTALL=0
@@ -55,7 +55,7 @@ run() {
 # 卸载
 # ---------------------------------------------------------------------------
 if [ "$UNINSTALL" = 1 ]; then
-    echo "卸载 WthinkVPN helper"
+    echo "卸载 OC GUI helper"
     run rm -f "$LIBEXEC"
     run rm -f "$POLKIT_FILE"
     # 只删自己建的 socket，不 rm -rf 整个目录 —— 目录里可能有别的状态
@@ -83,7 +83,7 @@ fi
 # ---------------------------------------------------------------------------
 # 安装
 # ---------------------------------------------------------------------------
-echo "安装 WthinkVPN 特权 helper 到 $PREFIX"
+echo "安装 OC GUI 特权 helper 到 $PREFIX"
 
 install -d -m 0755 "$PREFIX/libexec"
 install -d -m 0755 "$POLKIT_DIR"
@@ -98,9 +98,9 @@ echo "  $POLKIT_FILE"
 # 没有 systemd 的系统退化为「helper 首次运行时自建」。
 run install -d -m 0755 -o root -g root "$RUNTIME_DIR"
 if command -v systemd-tmpfiles >/dev/null 2>&1; then
-    TMPFILES="$PREFIX/lib/tmpfiles.d/wthinkvpn.conf"
+    TMPFILES="$PREFIX/lib/tmpfiles.d/oc-gui.conf"
     run install -d -m 0755 "$PREFIX/lib/tmpfiles.d"
-    printf '# 由 wthinkvpn install.sh 生成\nd %s 0755 root root -\n' "$RUNTIME_DIR" \
+    printf '# 由 oc-gui install.sh 生成\nd %s 0755 root root -\n' "$RUNTIME_DIR" \
         > "$TMPFILES"
     run install -m 0644 -o root -g root "$TMPFILES" "$TMPFILES"
     run systemd-tmpfiles --create "$TMPFILES"

@@ -4,8 +4,8 @@
 //!   python3 docs/mock_gateway.py &          # 监听 127.0.0.1:8443
 //!   cargo run --example e2e_mock
 
-use wthinkvpn_lib::profile::{FormBinding, Profile};
-use wthinkvpn_lib::tunnel::{argv, supervisor};
+use oc_gui::profile::{FormBinding, Profile};
+use oc_gui::tunnel::{argv, supervisor};
 
 fn main() {
     let ca = std::env::args()

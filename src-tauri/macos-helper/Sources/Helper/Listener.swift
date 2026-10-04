@@ -9,7 +9,7 @@ import SharedProtocol
 ///
 /// 注册流程在 App 侧：
 /// ```swift
-/// try SMAppService.daemon(plistName: "io.wthink.wthinkvpn.helper").register()
+/// try SMAppService.daemon(plistName: "io.github.rediceli.ocgui.helper").register()
 /// ```
 /// 注册后用户需在「系统设置 → 通用 → 登录项」手动批准 —— 这是
 /// Apple 有意的设计，daemon 不会弹自己的密码框。
@@ -23,7 +23,7 @@ enum Entry {
         // Team ID 未注入 ⇒ 拒绝所有连接。这是配置错误，不可降级。
         guard let teamID = Config.teamID else {
             FileHandle.standardError.write(Data("""
-            致命错误：WthinkVPNTeamID 未注入 Info.plist。
+            致命错误：OcGuiTeamID 未注入 Info.plist。
             helper 将拒绝所有连接。
             请用 Scripts/sign-macos.sh 构建（它会注入 Team ID）。
 
@@ -37,7 +37,7 @@ enum Entry {
         listener.resume()
 
         FileHandle.standardError.write(Data("""
-        WthinkVPN helper 已就绪
+        OC GUI helper 已就绪
           Mach service: \(Config.machService)
           Team ID: \(teamID)
           uid=\(getuid())
@@ -65,8 +65,8 @@ final class Session {
 // MARK: - XPC 接口
 
 /// App 侧调用的接口。协议与 `WRequest`/`WResponse` 一一对应。
-@objc(WthinkHelperProtocol)
-protocol WthinkHelperProtocol {
+@objc(OcHelperProtocol)
+protocol OcHelperProtocol {
     func send(_ payload: Data, reply: @escaping (Data?) -> Void)
 }
 
@@ -105,7 +105,7 @@ final class ConnectionListener: NSObject, NSXPCListenerDelegate {
             return false
         }
 
-        newConnection.exportedInterface = NSXPCInterface(with: WthinkHelperProtocol.self)
+        newConnection.exportedInterface = NSXPCInterface(with: OcHelperProtocol.self)
         newConnection.exportedObject = XPCBridge(listener: self)
         newConnection.resume()
 
@@ -118,7 +118,7 @@ final class ConnectionListener: NSObject, NSXPCListenerDelegate {
     // MARK: 调用方校验
 
     /// App 的 bundle id
-    static let expectedClientBundleID = "com.wthink.wthinkvpn"
+    static let expectedClientBundleID = "io.github.rediceli.ocgui"
 
     static func isClientAuthorized(pid: pid_t) -> Bool {
         guard let teamID = Config.teamID else {
@@ -211,13 +211,13 @@ final class ConnectionListener: NSObject, NSXPCListenerDelegate {
             case let .hello(version, _):
                 // 版本不匹配必须直接拒绝，而不是「尽力而为」——
                 // 协议语义变更后旧 App 的请求可能被误解为提权指令。
-                guard version == WthinkProtocol.version else {
+                guard version == OcProtocol.version else {
                     reply(try? encoder.encode(WResponse.failed(error: .protocolMismatch(
-                        expected: WthinkProtocol.version, got: version))))
+                        expected: OcProtocol.version, got: version))))
                     return
                 }
                 reply(try? encoder.encode(WResponse.ready(
-                    version: WthinkProtocol.version,
+                    version: OcProtocol.version,
                     authorized: true,
                     connected: session != nil)))
 
@@ -265,12 +265,12 @@ final class ConnectionListener: NSObject, NSXPCListenerDelegate {
         reply: @escaping (Data?) -> Void
     ) {
         // ---- 安全边界 1：程序白名单 ----
-        let program = ProcessInfo.processInfo.environment["WTHINKVPN_OPENCONNECT"]
+        let program = ProcessInfo.processInfo.environment["OCGUI_OPENCONNECT"]
             ?? "/usr/local/bin/openconnect"
         let url = URL(fileURLWithPath: program)
-        guard url.lastPathComponent.hasPrefix(WthinkProtocol.allowedProgram) else {
+        guard url.lastPathComponent.hasPrefix(OcProtocol.allowedProgram) else {
             reply(try? encoder.encode(WResponse.failed(error: .rejected(
-                reason: "只允许执行 \(WthinkProtocol.allowedProgram)，"
+                reason: "只允许执行 \(OcProtocol.allowedProgram)，"
                     + "收到 \(url.lastPathComponent)"))))
             return
         }
@@ -385,7 +385,7 @@ final class ConnectionListener: NSObject, NSXPCListenerDelegate {
 
 // MARK: - XPC 暴露对象
 
-final class XPCBridge: NSObject, WthinkHelperProtocol {
+final class XPCBridge: NSObject, OcHelperProtocol {
     private let listener: ConnectionListener
 
     init(listener: ConnectionListener) { self.listener = listener }

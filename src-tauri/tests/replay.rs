@@ -10,7 +10,7 @@
 //! | authfail.log  | 密码错误 |
 //! | badgroup.log  | 分组值在服务器上不存在 |
 
-use wthinkvpn_lib::tunnel::{parse_line, Event, Kind, State, TerminalCause, Tracker};
+use oc_gui::tunnel::{parse_line, Event, Kind, State, TerminalCause, Tracker};
 
 fn replay(path: &str) -> Vec<Event> {
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{path}: {e}"));

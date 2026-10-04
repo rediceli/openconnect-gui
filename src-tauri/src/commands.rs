@@ -218,11 +218,11 @@ pub fn helper_status() -> Result<HelperStatus, String> {
             // not_found = plist 未 embed 进 App bundle 或签名不匹配。
             // 与 not_registered 是不同的用户动作，提示也不同。
             "not_found" => (
-                "特权助手未随应用安装，请重新安装 WthinkVPN",
+                "特权助手未随应用安装，请重新安装 OC GUI",
                 "helper.status.not_found",
             ),
             "requires_approval" => (
-                "请在「系统设置 → 通用 → 登录项」批准 WthinkVPN",
+                "请在「系统设置 → 通用 → 登录项」批准 OC GUI",
                 "helper.status.requires_approval",
             ),
             _ => (
@@ -255,8 +255,8 @@ pub fn helper_status() -> Result<HelperStatus, String> {
         let privileged = ch.is_privileged();
 
         let helper_ready = crate::ipc::client::HelperHandle::probe(uid).is_ok();
-        let helper_bin = std::env::var("WTHINKVPN_HELPER_BIN")
-            .unwrap_or_else(|_| "/usr/libexec/wthinkvpn-helper".into());
+        let helper_bin = std::env::var("OCGUI_HELPER_BIN")
+            .unwrap_or_else(|_| "/usr/libexec/oc-gui-helper".into());
         let helper_installed = std::path::Path::new(&helper_bin).exists();
 
         let (channel_name, message, message_key) = if privileged {

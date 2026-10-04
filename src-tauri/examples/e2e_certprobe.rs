@@ -1,7 +1,7 @@
 //! 用真实网关验证证书探测：pin 必须与 openconnect 打印的一致。
 fn main() {
     let server = std::env::args().nth(1).expect("用法: e2e_certprobe <server>");
-    match wthinkvpn_lib::tlsprobe::probe(&server) {
+    match oc_gui::tlsprobe::probe(&server) {
         Ok(i) => {
             println!("host        = {}", i.host);
             println!("port        = {}", i.port);

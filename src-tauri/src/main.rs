@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    wthinkvpn_lib::run();
+    oc_gui::run();
 }

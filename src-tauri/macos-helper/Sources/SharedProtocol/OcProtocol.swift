@@ -6,12 +6,12 @@ import Foundation
 /// 这里用 Codable + `JSONSerialization` 而不是 XPC 支持的 NSSecureCoding ——
 /// 协议载荷结构简单，且我们已经在 Rust 侧固定了 JSON 形状。
 
-public enum WthinkProtocol {
+public enum OcProtocol {
     /// 必须与 Rust 侧 `PROTOCOL_VERSION` 一致
     public static let version: UInt16 = 1
 
     /// Mach service 名。必须与 launchd plist 的 ServiceLabel 一致。
-    public static let machService = "io.wthink.wthinkvpn.helper"
+    public static let machService = "io.github.rediceli.ocgui.helper"
 
     /// 唯一允许执行的程序
     public static let allowedProgram = "openconnect"

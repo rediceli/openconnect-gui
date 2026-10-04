@@ -14,7 +14,7 @@ use crate::profile::{Profile, SecretKind};
 use keyring::Entry;
 
 /// 钥匙串 service 名。用反向域名以免与其他应用撞车。
-const SERVICE: &str = "com.wthink.wthinkvpn";
+const SERVICE: &str = "io.github.rediceli.ocgui";
 
 #[derive(Debug)]
 pub enum SecretError {

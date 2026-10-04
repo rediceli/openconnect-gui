@@ -29,7 +29,7 @@ public final class XPCClient {
     public static let shared = XPCClient()
 
     private var connection: NSXPCConnection?
-    private let queue = DispatchQueue(label: "com.wthink.wthinkvpn.xpc")
+    private let queue = DispatchQueue(label: "io.github.rediceli.ocgui.xpc")
 
     private init() {}
 
@@ -40,8 +40,8 @@ public final class XPCClient {
     public func connect() throws -> NSXPCConnection {
         if let c = connection { return c }
 
-        let c = NSXPCConnection(machServiceName: WthinkProtocol.machService)
-        c.remoteObjectInterface = NSXPCInterface(with: WthinkHelperClientProtocol.self)
+        let c = NSXPCConnection(machServiceName: OcProtocol.machService)
+        c.remoteObjectInterface = NSXPCInterface(with: OcHelperClientProtocol.self)
 
         // helper 侧会做调用方校验；这里也应验证反向，
         // 以防有人用同名 Mach service 冒充 helper。
@@ -70,7 +70,7 @@ public final class XPCClient {
     /// Mach service 名是公开的，理论上任何人都能注册同名服务。
     /// 因此 App 必须反向校验，否则会把自己的密码送给攻击者的 helper。
     private static func helperRequirement() -> String {
-        let team = Bundle.main.object(forInfoDictionaryKey: "WthinkVPNTeamID") as? String ?? ""
+        let team = Bundle.main.object(forInfoDictionaryKey: "OcGuiTeamID") as? String ?? ""
         return """
         anchor apple generic \
         and certificate leaf[subject.OU] = "\(team)" \
@@ -83,17 +83,27 @@ public final class XPCClient {
     /// 发一个请求并等一个应答。
     public func send(_ request: WRequest, timeout: TimeInterval = 15) throws -> WResponse {
         let c = try connect()
-        let proxy = try c.remoteObjectProxyWithErrorHandler { err in
-            NSLog("XPC 错误: \(err)")
-        } as? WthinkHelperClientProtocol
-        guard let p = proxy else {
-            throw XPCClientError.notConnected
-        }
 
         let payload = try JSONEncoder().encode(request)
         let sem = DispatchSemaphore(value: 0)
+        let box = NSLock()
         var result: WResponse?
+        // 真正的错误来源是 errorHandler，不是 reply 闭包 —— reply 只在
+        // 成功时带数据回来，失败时它可能根本不调用。
+        //
+        // 修一个实际的 bug：这里原本声明 `var failure: Error?` 却从未赋值，
+        // 于是 `if let failure` 恒为假，**helper 侧报错时错误被吞掉**，
+        // 只会走到下面的 `.noReply`，把「认证失败」显示成「无响应」。
+        // 而 errorHandler 与 reply 闭包可能分处不同线程，用 NSLock 保护。
         var failure: Error?
+
+        let proxy = c.remoteObjectProxyWithErrorHandler { err in
+            box.lock()
+            failure = err
+            box.unlock()
+            sem.signal()
+        } as? OcHelperClientProtocol
+        guard let p = proxy else { throw XPCClientError.notConnected }
 
         p.send(payload) { data in
             if let data { result = try? JSONDecoder().decode(WResponse.self, from: data) }
@@ -105,14 +115,17 @@ public final class XPCClient {
         if sem.wait(timeout: .now() + timeout) == .timedOut {
             throw XPCClientError.timeout
         }
-        if let failure { throw failure }
+        box.lock()
+        let err = failure
+        box.unlock()
+        if let err { throw err }
         guard let r = result else { throw XPCClientError.noReply }
         return r
     }
 
     /// 握手。版本不匹配会抛错。
     public func hello() throws -> WResponse {
-        try send(.hello(version: WthinkProtocol.version, callerUID: UInt32(getuid())))
+        try send(.hello(version: OcProtocol.version, callerUID: UInt32(getuid())))
     }
 
     public func start(
@@ -144,15 +157,15 @@ public enum XPCClientError: Error, LocalizedError {
         case .timeout: return "特权助手无响应（可能已崩溃）"
         case .noReply: return "特权助手返回了空应答"
         case .notRegistered: return "特权助手未注册，请先在设置中启用"
-        case .needsApproval: return "请在「系统设置 → 通用 → 登录项」批准 WthinkVPN"
+        case .needsApproval: return "请在「系统设置 → 通用 → 登录项」批准 OC GUI"
         case let .registrationFailed(m): return "注册特权助手失败：\(m)"
         }
     }
 }
 
 /// helper 侧导出的接口（App 侧看到的形状）。
-@objc(WthinkHelperClientProtocol)
-protocol WthinkHelperClientProtocol {
+@objc(OcHelperClientProtocol)
+protocol OcHelperClientProtocol {
     func send(_ payload: Data, reply: @escaping (Data?) -> Void)
 }
 
@@ -205,6 +218,6 @@ public final class HelperRegistration {
 }
 
 enum HelperInfo {
-    static let daemonPlistName = "io.wthink.wthinkvpn.helper"
-    static let bundleID = "com.wthink.wthinkvpn"
+    static let daemonPlistName = "io.github.rediceli.ocgui.helper"
+    static let bundleID = "io.github.rediceli.ocgui"
 }

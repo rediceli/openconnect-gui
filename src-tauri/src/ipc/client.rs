@@ -4,10 +4,10 @@
 //!
 //! # 端点查找顺序
 //!
-//! 1. `WTHINKVPN_HELPER_SOCKET` 环境变量（测试与多实例用）
-//! 2. Linux: `/run/wthinkvpn/helper-<uid>.sock`
-//! 3. Windows: `\\.\pipe\WthinkVPN-helper-<SID>`
-//! 4. 开发模式: `/tmp/wthinkvpn-helper-<uid>.sock`
+//! 1. `OCGUI_HELPER_SOCKET` 环境变量（测试与多实例用）
+//! 2. Linux: `/run/oc-gui/helper-<uid>.sock`
+//! 3. Windows: `\\.\pipe\OC GUI-helper-<SID>`
+//! 4. 开发模式: `/tmp/oc-gui-helper-<uid>.sock`
 //!
 //! 找不到端点时 GUI 应引导用户启动 helper（`HelperHandle::spawn_elevated`），
 //! 而不是自己提权 —— 提权决策属于用户，不属于应用。
@@ -64,7 +64,7 @@ fn set_read_timeout(_sock: &mut Conn, _d: Option<std::time::Duration>) {}
 /// 开发模式 socket 路径（`--serve` 入口创建）。
 #[cfg(unix)]
 pub fn dev_socket_path(uid: u32) -> PathBuf {
-    PathBuf::from(format!("/tmp/wthinkvpn-helper-{uid}.sock"))
+    PathBuf::from(format!("/tmp/oc-gui-helper-{uid}.sock"))
 }
 
 /// 按平台与 uid/sid 推导端点名。
@@ -77,7 +77,7 @@ pub fn dev_socket_path(uid: u32) -> PathBuf {
 /// Linux 存在的 `per_user_socket_path`，直接编译失败。
 pub fn endpoint_for(uid: u32) -> String {
     let _ = uid; // Windows 上端点由 SID 决定，与 uid 无关
-    if let Ok(p) = std::env::var("WTHINKVPN_HELPER_SOCKET") {
+    if let Ok(p) = std::env::var("OCGUI_HELPER_SOCKET") {
         return p;
     }
     #[cfg(target_os = "linux")]
@@ -158,8 +158,8 @@ impl HelperHandle {
         #[cfg(windows)]
         {
             let _ = uid;
-            let program = std::env::var("WTHINKVPN_HELPER_BIN")
-                .unwrap_or_else(|_| "wthinkvpn-helper.exe".to_string());
+            let program = std::env::var("OCGUI_HELPER_BIN")
+                .unwrap_or_else(|_| "oc-gui-helper.exe".to_string());
             let p = PathBuf::from(&program);
             crate::ipc::pipe::spawn_elevated(&p).map_err(|e| HelperError::Internal {
                 message: format!("UAC 提权启动失败: {e}"),
@@ -338,8 +338,8 @@ impl HelperHandle {
     /// 返回 `Ok(())` 表示 pkexec 已被调用（不代表 helper 已就绪），
     /// 调用方应随后轮询 [`HelperHandle::probe`]。
     pub fn spawn_via_pkexec(uid: u32) -> Result<(), HelperError> {
-        let program = std::env::var("WTHINKVPN_HELPER_BIN")
-            .unwrap_or_else(|_| "/usr/libexec/wthinkvpn-helper".to_string());
+        let program = std::env::var("OCGUI_HELPER_BIN")
+            .unwrap_or_else(|_| "/usr/libexec/oc-gui-helper".to_string());
         if !PathBuf::from(&program).exists() {
             return Err(HelperError::NotInstalled { path: program });
         }
@@ -399,7 +399,7 @@ mod tests {
     fn socket_path_env_override_wins() {
         // ScopedEnv 持有进程级环境变量锁 —— 否则会与并行的
         // linux_path_uses_run_directory 竞争（曾因此偶发失败）
-        let _env = crate::testenv::ScopedEnv::set("WTHINKVPN_HELPER_SOCKET", "/tmp/custom.sock");
+        let _env = crate::testenv::ScopedEnv::set("OCGUI_HELPER_SOCKET", "/tmp/custom.sock");
         assert_eq!(endpoint_for(1000), "/tmp/custom.sock".to_string());
     }
 
@@ -410,7 +410,7 @@ mod tests {
         #[cfg(target_os = "linux")]
         {
             let p = endpoint_for(1000);
-            assert!(p.starts_with("/run/wthinkvpn/"), "实际: {p}");
+            assert!(p.starts_with("/run/oc-gui/"), "实际: {p}");
             assert!(p.contains("1000"), "实际: {p}");
         }
     }
@@ -423,7 +423,7 @@ mod tests {
 
     #[test]
     fn pkexec_missing_binary_is_reported() {
-        let _env = crate::testenv::ScopedEnv::set("WTHINKVPN_HELPER_BIN", "/nonexistent/helper");
+        let _env = crate::testenv::ScopedEnv::set("OCGUI_HELPER_BIN", "/nonexistent/helper");
         let err = match HelperHandle::spawn_via_pkexec(1000) {
             Err(e) => e,
             Ok(_) => panic!("不应启动成功"),
@@ -434,11 +434,11 @@ mod tests {
     #[test]
     fn probe_against_dead_socket_fails_fast() {
         // 造一个存在但没人监听的 socket
-        let p = std::env::temp_dir().join(format!("wthinkvpn-dead-{}.sock", std::process::id()));
+        let p = std::env::temp_dir().join(format!("oc-gui-dead-{}.sock", std::process::id()));
         let _ = std::os::unix::net::UnixListener::bind(&p);
-        unsafe { std::env::set_var("WTHINKVPN_HELPER_SOCKET", &p) };
+        unsafe { std::env::set_var("OCGUI_HELPER_SOCKET", &p) };
         let r = HelperHandle::probe(1000);
-        unsafe { std::env::remove_var("WTHINKVPN_HELPER_SOCKET") };
+        unsafe { std::env::remove_var("OCGUI_HELPER_SOCKET") };
         let _ = std::fs::remove_file(&p);
         // 监听器已 drop → connect 会被拒（ECONNREFUSED），不 panic
         assert!(r.is_err());

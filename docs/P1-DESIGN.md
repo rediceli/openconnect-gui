@@ -1,4 +1,4 @@
-# WthinkVPN — P1 技术设计
+# OC GUI — P1 技术设计
 
 日期：2026-10-03
 状态：P1 完成（后端 + UI 可运行），生产化待办见文末
@@ -6,7 +6,7 @@
 **Swift 12 passed / 0 failed**（macOS helper 协议编解码）
 + Linux 特权边界回归（需 root，见 §6.3.8）
 Clippy：0 warning
-产物：`WthinkVPN.app` **11.12 MiB** + macOS helper/macosctl **~600 KB**
+产物：`OC GUI.app` **11.12 MiB** + macOS helper/macosctl **~600 KB**
 
 ---
 
@@ -36,7 +36,7 @@ helper/
 ├── src/main.rs       特权 helper（--authorize / --serve / --selftest）
 ├── install.sh        Linux 安装脚本（含 4 项校验）
 └── polkit/
-    └── org.wthink.wthinkvpn-helper.policy
+    └── org.github.rediceli.ocgui-helper.policy
 
 ci/
 ├── privsep-test.sh   Linux 特权边界回归（8 组断言，核心是非 root 负向测试）
@@ -182,11 +182,11 @@ openconnect 在 `<auth id="success">` 路径下**不打任何认证成功日志*
 `helper/` 已实现并实测：
 
 ```
-$ wthinkvpn-helper --selftest
+$ oc-gui-helper --selftest
 selftest ok                      # 程序白名单、argv 复检、0600 文件
 
-$ wthinkvpn-helper --serve /tmp/hthink.sock
-helper listening on /tmp/wthinkvpn-helper.sock
+$ oc-gui-helper --serve /tmp/hthink.sock
+helper listening on /tmp/oc-gui-helper.sock
 
 Hello:      {'event':'ready','version':1,'authorized':true,'connected':false}
 BadVer:     {'error':{'kind':'protocol_mismatch','expected':1,'got':99}}
@@ -346,7 +346,7 @@ openconnect **确实**处理 Windows 控制台事件，且 `SetConsoleCtrlHandle
 jq 字段路径（`authored_date[:10]` 等）也已用真实 API 响应验证。
 
 **本机未验证**：交叉编译本身（无 MinGW）、Windows 上的实际连接。
-`channel.rs` 的 Windows 分支当前仍从 `WTHINKVPN_OPENCONNECT` 或
+`channel.rs` 的 Windows 分支当前仍从 `OCGUI_OPENCONNECT` 或
 `/usr/sbin/openconnect` 取路径，**应改为从 `current_exe()` 同级目录找** ——
 Windows PATH 不可控，且 openconnect 不会被常规安装。
 
@@ -375,17 +375,17 @@ pkexec openconnect --csd-wrapper=/tmp/evil.sh vpn.corp.com
 ```
 
 **无需提权提示的 root 漏洞。** 因此 polkit rule 只做一件事：
-授权「启动 wthinkvpn-helper 这个程序」。真正的提权边界在别处。
+授权「启动 oc-gui-helper 这个程序」。真正的提权边界在别处。
 
 #### 6.3.2 三层防护
 
 | 层 | 位置 | 作用 |
 |---|---|---|
-| 1. polkit | `org.wthink.wthinkvpn-helper.policy` | 决定「谁有资格让 helper 为自己开 socket」 |
+| 1. polkit | `org.github.rediceli.ocgui-helper.policy` | 决定「谁有资格让 helper 为自己开 socket」 |
 | 2. 文件系统权限 | `create_per_user_socket()` | socket `0600` + 属主该 uid。**授权结果直接编码在权限里** |
 | 3. 每次连接复检 | `authorize()` | 按 uid 白名单再判一次 |
 
-三层缺一不可。第 2 层挡住普通用户；即使 `/run/wthinkvpn` 目录权限被
+三层缺一不可。第 2 层挡住普通用户；即使 `/run/oc-gui` 目录权限被
 误配成 0777，socket 本身仍是 0600 + 正确属主；第 3 层挡住同组内的其他人。
 
 **竞态说明**：`bind` 与 `chown` 之间存在极短窗口，期间 socket 属主仍是
@@ -399,14 +399,14 @@ root 且权限 0600 ⇒ 其他用户连不上。因此**不存在「未授权即
 旧 socket 仍在。每用户 socket 没有中间态，也没有残留。
 
 ```
-/run/wthinkvpn/helper-<uid>.sock   0600, 属主 <uid>
+/run/oc-gui/helper-<uid>.sock   0600, 属主 <uid>
 ```
 
 #### 6.3.4 Linux 实现状态 ✅
 
 ```
 src-tauri/helper/
-├── polkit/org.wthink.wthinkvpn-helper.policy
+├── polkit/org.github.rediceli.ocgui-helper.policy
 ├── install.sh                  (--dry-run / --uninstall)
 └── src/main.rs                 (--authorize <uid> | --serve | --selftest)
 ```
@@ -425,7 +425,7 @@ src-tauri/helper/
 GUI  → HelperHandle::probe(uid)
         socket 不存在 → 提示用户
 GUI  → HelperHandle::spawn_via_pkexec(uid)
-        pkexec /usr/libexec/wthinkvpn-helper --authorize <uid>
+        pkexec /usr/libexec/oc-gui-helper --authorize <uid>
           → polkit 弹密码框（auth_admin）
           → helper 以 root 运行，geteuid()==0 校验通过
           → create_per_user_socket(uid) → chown + 0600
@@ -458,8 +458,8 @@ GUI  → HelperHandle::connect(uid) → 握手 → 发请求
 **开发模式全链路实测**：
 
 ```
-$ WTHINKVPN_ALLOWED_UIDS=501 wthinkvpn-helper --serve /tmp/wthinkvpn-helper-501.sock
-helper listening on /tmp/wthinkvpn-helper-501.sock (euid=501, allowed=[501])
+$ OCGUI_ALLOWED_UIDS=501 oc-gui-helper --serve /tmp/oc-gui-helper-501.sock
+helper listening on /tmp/oc-gui-helper-501.sock (euid=501, allowed=[501])
 
 [ok] helper 可用
 [ok] helper 拒绝了危险参数: Rejected { reason: "禁止的参数: --csd-wrapper" }
@@ -472,9 +472,9 @@ helper listening on /tmp/wthinkvpn-helper-501.sock (euid=501, allowed=[501])
 helper 未启动时客户端给的是可操作提示，不是异常：
 
 ```
-[info] helper 不可用: 特权助手未安装或未启动（/tmp/wthinkvpn-helper-501.sock）
+[info] helper 不可用: 特权助手未安装或未启动（/tmp/oc-gui-helper-501.sock）
        UI 应引导用户执行：
-       pkexec /usr/libexec/wthinkvpn-helper --authorize 501
+       pkexec /usr/libexec/oc-gui-helper --authorize 501
 ```
 
 #### 6.3.5 macOS `LOCAL_PEERCRED` 的坑
@@ -641,8 +641,8 @@ macOS 的特权模型与 Linux 完全不同：没有 polkit 这样的通用提�
 macos-helper/
 ├── Package.swift
 ├── Sources/SharedProtocol/
-│   ├── WthinkProtocol.swift          请求/响应类型，与 src/ipc.rs 一一对应
-│   └── Resources/io.wthink.wthinkvpn.helper.plist
+│   ├── OcProtocol.swift          请求/响应类型，与 src/ipc.rs 一一对应
+│   └── Resources/io.github.rediceli.ocgui.helper.plist
 ├── Sources/Helper/
 │   ├── Listener.swift                XPC listener + 调用方校验 + openconnect 监管
 │   ├── Config.swift                  Team ID（构建期注入，缺失则拒绝所有连接）
@@ -692,7 +692,7 @@ guard clientPID > 0, isClientAuthorized(pid: clientPID) else { return false }
 
 `isClientAuthorized` 检查：
 1. **签名有效** — `SecStaticCodeCheckValidityWithErrors`
-2. **bundle id == `com.wthink.wthinkvpn`**
+2. **bundle id == `io.github.rediceli.ocgui`**
 3. **Team ID == 构建期注入的 Team ID**
 
 第 3 项是关键：防止别的开发者用同名 bundle id 冒领。
@@ -768,7 +768,7 @@ daemon 的，机制天然匹配，排查时 `launchctl print system/<label>`
 2. sed 注入 Team ID 到 launchd plist
 3. cargo tauri build                    构建 GUI
 4. embed: LaunchDaemons/*.plist
-        + Library/HelperTools/wthinkvpn-helper
+        + Library/HelperTools/oc-gui-helper
         + MacOS/macosctl
 5. codesign: 先 Helper，再 App          ← 顺序不能反
 6. 8 项校验
@@ -842,7 +842,7 @@ Windows 代码在 macOS 上写完后**没有任何办法验证**，除非先解�
 
 | | Linux | Windows |
 |---|---|---|
-| 端点 | `/run/wthinkvpn/helper-<uid>.sock` | `\\.\pipe\WthinkVPN-helper-<SID>` |
+| 端点 | `/run/oc-gui/helper-<uid>.sock` | `\\.\pipe\OC GUI-helper-<SID>` |
 | 授权 | polkit → socket `0600` → 运行时 uid 复检 | **DACL**（`CreateNamedPipeW` 时写入） |
 | 提权 | `pkexec` | `ShellExecuteW` + `runas` verb |
 
@@ -1011,10 +1011,10 @@ cargo run --example cmd_smoke
 cargo run --manifest-path helper/Cargo.toml -- --selftest
 
 # 跨连接 Stop（用长驻的 openconnect 替身）
-WTHINKVPN_ALLOWED_UIDS=$(id -u) \
-  WTHINKVPN_OPENCONNECT=$PWD/tests/bin/fake-openconnect.sh \
-  ./helper/target/release/wthinkvpn-helper --serve /tmp/wthinkvpn-helper-$(id -u).sock &
-WTHINKVPN_HELPER_SOCKET=/tmp/wthinkvpn-helper-$(id -u).sock cargo run --example e2e_stop
+OCGUI_ALLOWED_UIDS=$(id -u) \
+  OCGUI_OPENCONNECT=$PWD/tests/bin/fake-openconnect.sh \
+  ./helper/target/release/oc-gui-helper --serve /tmp/oc-gui-helper-$(id -u).sock &
+OCGUI_HELPER_SOCKET=/tmp/oc-gui-helper-$(id -u).sock cargo run --example e2e_stop
 
 # macOS helper（Swift）
 swift build --package-path macos-helper
@@ -1028,8 +1028,8 @@ bash ci/check-windows.sh
 
 # GUI client → helper → openconnect 全链路
 cargo build --release --manifest-path helper/Cargo.toml
-WTHINKVPN_ALLOWED_UIDS=$(id -u) \
-  ./helper/target/release/wthinkvpn-helper --serve /tmp/wthinkvpn-helper-$(id -u).sock &
+OCGUI_ALLOWED_UIDS=$(id -u) \
+  ./helper/target/release/oc-gui-helper --serve /tmp/oc-gui-helper-$(id -u).sock &
 cargo run --example e2e_helper -- <ca.crt>
 ```
 
@@ -1045,15 +1045,15 @@ sudo ./helper/install.sh --uninstall
 GUI 侧的提权入口（应用内部调用等价于这条）：
 
 ```sh
-pkexec /usr/libexec/wthinkvpn-helper --authorize $(id -u)
+pkexec /usr/libexec/oc-gui-helper --authorize $(id -u)
 ```
 
 ### Linux 特权边界回归（需 root）
 
 ```sh
 # 容器（推荐）
-docker build -f ci/Dockerfile -t wthinkvpn-ci src-tauri
-docker run --rm --privileged wthinkvpn-ci
+docker build -f ci/Dockerfile -t oc-gui-ci src-tauri
+docker run --rm --privileged oc-gui-ci
 
 # 或直接在 root 的 Linux 机器上
 sudo ./ci/privsep-test.sh
@@ -1110,7 +1110,7 @@ Direct 通道原先只检查密钥泄漏（`audit_argv`），漏了参数合法�
 | 竞态 | 现象 | 根因 | 修法 |
 |---|---|---|---|
 | 环境变量竞争 | 约 1/10 概率失败 | 测试 `set_var`/`remove_var` 改的是**进程级**状态，而 harness 默认并行。`socket_path_env_override_wins` 与 `linux_path_uses_run_directory` 互相看到对方的值 | 新增 `src/testenv.rs`：全局 `Mutex` + `ScopedEnv` RAII 守卫。**只有一把锁** —— 之前 `channel.rs` 有私有锁、`client.rs` 又一把，两把锁保护同一个全局状态等于没锁 |
-| 共享临时目录竞争 | 40 次里 2 次失败 | `bad_passphrase_writes_nothing` 去数共享 `temp_dir()` 里 `wthinkvpn-oc-*` 的数量，而并行的 `passphrase_never_appears_in_arg` 正好在往同一目录写正常文件 | 抽出 `write_secure_in(dir, ...)`，测试传私有 `TempDir` |
+| 共享临时目录竞争 | 40 次里 2 次失败 | `bad_passphrase_writes_nothing` 去数共享 `temp_dir()` 里 `oc-gui-oc-*` 的数量，而并行的 `passphrase_never_appears_in_arg` 正好在往同一目录写正常文件 | 抽出 `write_secure_in(dir, ...)`，测试传私有 `TempDir` |
 
 第二条尤其值得记：`bad_passphrase_writes_nothing` 是一条**安全断言**
 （口令校验失败不得在磁盘留下明文），一个偶发失败的测试会让人怀疑

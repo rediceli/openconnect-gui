@@ -32,7 +32,7 @@ use crate::tunnel::{ArgPlan, State, TerminalCause};
 ///
 /// # 优先级
 ///
-/// 1. `WTHINKVPN_OPENCONNECT`（测试与自定义安装用）
+/// 1. `OCGUI_OPENCONNECT`（测试与自定义安装用）
 /// 2. **与自身同级目录**（Windows 上的正解）
 /// 3. 平台默认路径
 /// 4. 裸名 `openconnect`（交给 OS 查 PATH）
@@ -46,7 +46,7 @@ use crate::tunnel::{ArgPlan, State, TerminalCause};
 ///
 /// 同级目录还有一个好处：升级只需替换目录内容，不用管注册表。
 pub fn resolve_openconnect() -> Option<PathBuf> {
-    if let Ok(p) = std::env::var("WTHINKVPN_OPENCONNECT") {
+    if let Ok(p) = std::env::var("OCGUI_OPENCONNECT") {
         let p = PathBuf::from(p);
         return if p.exists() { Some(p) } else { None };
     }
@@ -810,7 +810,7 @@ mod tests {
     /// 拿 A 锁的测试仍可能与拿 B 锁的测试互相干扰。
     fn with_openconnect_env<T>(value: Option<&str>, f: impl FnOnce() -> T) -> T {
         let _guard = crate::testenv::env_guard();
-        let key = "WTHINKVPN_OPENCONNECT";
+        let key = "OCGUI_OPENCONNECT";
         let saved = std::env::var(key).ok();
         // SAFETY: 持有 testenv 的全局环境变量锁
         unsafe {

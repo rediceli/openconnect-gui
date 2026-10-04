@@ -2,8 +2,8 @@
 # 在 CI 容器里运行完整的 Linux 特权边界测试。
 #
 # 用法：
-#   docker build -f ci/Dockerfile -t wthinkvpn-ci .
-#   docker run --rm --privileged wthinkvpn-ci
+#   docker build -f ci/Dockerfile -t oc-gui-ci .
+#   docker run --rm --privileged oc-gui-ci
 #
 # `--privileged` 是必需的：测试需要 useradd、mount namespace 操作，
 # 以及 polkitd 的 dbus/systemd 交互。

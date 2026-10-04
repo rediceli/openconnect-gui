@@ -7,7 +7,7 @@
 //! 对方的值 —— 表现为偶发失败，且重跑就好了。
 //!
 //! 真实踩到过：`socket_path_env_override_wins` 设置
-//! `WTHINKVPN_HELPER_SOCKET` 后 `remove_var`，与并行的
+//! `OCGUI_HELPER_SOCKET` 后 `remove_var`，与并行的
 //! `linux_path_uses_run_directory` 竞争，后者读到 `/tmp/custom.sock`
 //! 就断言失败。
 //!

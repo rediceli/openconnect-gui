@@ -5,7 +5,7 @@
 //!
 //! 用法：cargo run --example e2e_macos
 
-use wthinkvpn_lib::channel::{self, Channel};
+use oc_gui::channel::{self, Channel};
 
 fn main() {
     let uid = channel::current_uid();

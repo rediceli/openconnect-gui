@@ -1,11 +1,12 @@
 [package]
-name = "wthinkvpn-helper-win"
+name = "oc-gui-helper-win"
 version = "0.1.0"
 edition = "2024"
-description = "WthinkVPN Windows 特权助手（named pipe）"
+description = "OC GUI Windows 特权助手（named pipe）"
+license = "Apache-2.0"
 
 [[bin]]
-name = "wthinkvpn-helper"
+name = "oc-gui-helper"
 path = "src/main.rs"
 
 [dependencies]

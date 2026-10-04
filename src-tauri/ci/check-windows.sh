@@ -69,7 +69,7 @@ trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/src"
 cat > "$TMP/Cargo.toml" <<EOF
 [package]
-name = "wthinkvpn-ipcchk"
+name = "oc-gui-ipcchk"
 version = "0.0.0"
 edition = "2024"
 

@@ -1,7 +1,7 @@
 // swift-tools-version: 5.9
 import PackageDescription
 
-// WthinkVPN macOS 特权助手
+// OC GUI macOS 特权助手
 //
 // # 为什么是 Swift 而不是复用 Rust helper
 //
@@ -30,10 +30,10 @@ import PackageDescription
 //   swift build -c release
 
 let package = Package(
-    name: "WthinkVPNHelper",
+    name: "OcGuiHelper",
     platforms: [.macOS(.v13)],
     products: [
-        .executable(name: "wthinkvpn-helper", targets: ["Helper"]),
+        .executable(name: "oc-gui-helper", targets: ["Helper"]),
         // Rust GUI 与 Swift 之间的边界：行协议 CLI
         .executable(name: "macosctl", targets: ["Macosctl"]),
         .library(name: "SharedProtocol", targets: ["SharedProtocol"]),
@@ -42,7 +42,7 @@ let package = Package(
     targets: [
         .target(
             name: "SharedProtocol",
-            resources: [.copy("Resources/io.wthink.wthinkvpn.helper.plist")]
+            resources: [.copy("Resources/io.github.rediceli.ocgui.helper.plist")]
         ),
         // App 侧 XPC 客户端
         .target(name: "XPCClient", dependencies: ["SharedProtocol"]),

@@ -280,7 +280,7 @@ mod win {
     /// SYSTEM 身份执行任意脚本。`validate_args` 是共享代码，
     /// 跨平台行为一致（见 oc-proto 的测试）。
     fn start_openconnect(args: &[String], server: &str) -> Response {
-        let exe = std::env::var("WTHINKVPN_OPENCONNECT").unwrap_or_else(|_| "openconnect.exe".into());
+        let exe = std::env::var("OCGUI_OPENCONNECT").unwrap_or_else(|_| "openconnect.exe".into());
         if let Err(e) = validate_program(std::path::Path::new(&exe)) {
             return Response::Failed { error: e };
         }

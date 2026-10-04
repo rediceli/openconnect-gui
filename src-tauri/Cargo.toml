@@ -1,15 +1,15 @@
 [package]
-name = "wthinkvpn"
+name = "oc-gui"
 version = "0.1.0"
 description = "Cross-platform openconnect desktop client"
 authors = ["wthink"]
-license = ""
+license = "Apache-2.0"
 repository = ""
 edition = "2024"
 rust-version = "1.90"
 
 [lib]
-name = "wthinkvpn_lib"
+name = "oc_gui"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

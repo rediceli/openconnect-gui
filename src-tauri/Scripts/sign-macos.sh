@@ -2,16 +2,16 @@
 # 构建、签名、嵌入 macOS 特权助手
 #
 # 产出（嵌进 .app bundle）：
-#   Contents/MacOS/wthinkvpn                    GUI
-#   Contents/Library/LaunchDaemons/io.wthink.wthinkvpn.helper.plist
-#   Contents/Library/HelperTools/wthinkvpn-helper
+#   Contents/MacOS/oc-gui                    GUI
+#   Contents/Library/LaunchDaemons/io.github.rediceli.ocgui.helper.plist
+#   Contents/Library/HelperTools/oc-gui-helper
 #   Contents/MacOS/macosctl                     XPC 客户端 CLI
 #
 # # 为什么必须签名，且 App 与 Helper 要同一 Team ID
 #
 # 1. privileged XPC 要求两者同 Team ID —— helper 的调用方校验就是比对
 #    Team ID 与 bundle id
-# 2. Team ID 由构建期注入（Info.plist 的 WthinkVPNTeamID），
+# 2. Team ID 由构建期注入（Info.plist 的 OcGuiTeamID），
 #    这是 helper 判断「谁有资格驱动我」的唯一依据
 # 3. 两者都要 Hardened Runtime + 公证，否则 Gatekeeper 会拦
 #
@@ -19,7 +19,7 @@
 #
 #   Scripts/sign-macos.sh --team-id ABCDE12345
 #   Scripts/sign-macos.sh --team-id ABCDE12345 --notarize --apple-id ... \
-#       --team-id ... --password @keychain:WTHINK_APP_SPECIFIC_PW
+#       --team-id ... --password @keychain:OCGUI_APP_SPECIFIC_PW
 #
 # # 关键顺序（错一步就会失败）
 #
@@ -34,10 +34,10 @@ SRC_TAURI="$(cd "$HERE/.." && pwd)"
 REPO="$(cd "$SRC_TAURI/.." && pwd)"
 HELPER_PKG="$SRC_TAURI/macos-helper"
 
-APP_NAME="WthinkVPN"
-BUNDLE_ID="com.wthink.wthinkvpn"
-HELPER_ID="io.wthink.wthinkvpn.helper"
-DAEMON_PLIST="io.wthink.wthinkvpn.helper"
+APP_NAME="OC GUI"
+BUNDLE_ID="io.github.rediceli.ocgui"
+HELPER_ID="io.github.rediceli.ocgui.helper"
+DAEMON_PLIST="io.github.rediceli.ocgui.helper"
 
 TEAM_ID=""
 DO_NOTARIZE=1
@@ -71,7 +71,7 @@ log "1/6 构建 Swift helper"
 command -v swift >/dev/null || die "需要 Swift（xcode-select --install）"
 cd "$HELPER_PKG"
 swift build -c release
-HELPER_BIN="$(swift build -c release --show-bin-path)/wthinkvpn-helper"
+HELPER_BIN="$(swift build -c release --show-bin-path)/oc-gui-helper"
 CTL_BIN="$(swift build -c release --show-bin-path)/macosctl"
 [ -x "$HELPER_BIN" ] || die "helper 未产出"
 [ -x "$CTL_BIN" ]   || die "macosctl 未产出"
@@ -97,11 +97,11 @@ PLIST_OUT="$(mktemp -d)/$DAEMON_PLIST.plist"
 sed "s/__TEAM_ID__/$TEAM_ID/g" "$PLIST_TEMPLATE" > "$PLIST_OUT"
 
 # 校验替换生效
-if ! /usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:WTHINKVPN_TEAM_ID" "$PLIST_OUT" 2>/dev/null \
+if ! /usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:OCGUI_TEAM_ID" "$PLIST_OUT" 2>/dev/null \
     | grep -q "^$TEAM_ID$"; then
     die "Team ID 注入失败 —— helper 会拒绝所有连接"
 fi
-echo "  plist EnvironmentVariables:WTHINKVPN_TEAM_ID = $TEAM_ID ✓"
+echo "  plist EnvironmentVariables:OCGUI_TEAM_ID = $TEAM_ID ✓"
 
 # ---------------------------------------------------------------------------
 log "3/6 构建 GUI"
@@ -123,19 +123,19 @@ mkdir -p "$APP/Contents/Library/LaunchDaemons"
 mkdir -p "$APP/Contents/Library/HelperTools"
 # 用注入过 Team ID 的那份
 cp "$PLIST_OUT" "$APP/Contents/Library/LaunchDaemons/$DAEMON_PLIST.plist"
-cp "$HELPER_BIN" "$APP/Contents/Library/HelperTools/wthinkvpn-helper"
+cp "$HELPER_BIN" "$APP/Contents/Library/HelperTools/oc-gui-helper"
 cp "$CTL_BIN"   "$APP/Contents/MacOS/macosctl"
-chmod 755 "$APP/Contents/Library/HelperTools/wthinkvpn-helper"
+chmod 755 "$APP/Contents/Library/HelperTools/oc-gui-helper"
 chmod 755 "$APP/Contents/MacOS/macosctl"
 
 # GUI 侧的 Info.plist 也要 Team ID（XPCClient 反向校验 helper 时用）
-/usr/libexec/PlistBuddy -c "Set :WthinkVPNTeamID $TEAM_ID" "$APP/Contents/Info.plist" \
+/usr/libexec/PlistBuddy -c "Set :OcGuiTeamID $TEAM_ID" "$APP/Contents/Info.plist" \
     2>/dev/null \
-  || /usr/libexec/PlistBuddy -c "Add :WthinkVPNTeamID string $TEAM_ID" "$APP/Contents/Info.plist"
+  || /usr/libexec/PlistBuddy -c "Add :OcGuiTeamID string $TEAM_ID" "$APP/Contents/Info.plist"
 
 # GUI 从 Contents/MacOS/macosctl 找客户端（channel.rs 的查找顺序之一）
 echo "  Contents/Library/LaunchDaemons/$DAEMON_PLIST.plist"
-echo "  Contents/Library/HelperTools/wthinkvpn-helper"
+echo "  Contents/Library/HelperTools/oc-gui-helper"
 echo "  Contents/MacOS/macosctl"
 
 # ---------------------------------------------------------------------------
@@ -153,7 +153,7 @@ sign() {
         "$target"
 }
 
-sign "$APP/Contents/Library/HelperTools/wthinkvpn-helper"
+sign "$APP/Contents/Library/HelperTools/oc-gui-helper"
 echo "  signed helper"
 sign "$APP/Contents/MacOS/macosctl"
 echo "  signed macosctl"
@@ -184,7 +184,7 @@ fi
 
 # 3. helper 与 App 的 Team ID 一致
 app_team=$(codesign -dv --verbose=4 "$APP" 2>&1 | sed -n 's/^TeamIdentifier=//p')
-helper_team=$(codesign -dv --verbose=4 "$APP/Contents/Library/HelperTools/wthinkvpn-helper" 2>&1 \
+helper_team=$(codesign -dv --verbose=4 "$APP/Contents/Library/HelperTools/oc-gui-helper" 2>&1 \
     | sed -n 's/^TeamIdentifier=//p')
 if [ -n "$app_team" ] && [ "$app_team" = "$helper_team" ]; then
     echo "  ok   Team ID 一致 ($app_team)"
@@ -194,7 +194,7 @@ else
 fi
 
 # 4. helper 与 App 的 bundle id 正确
-helper_id=$(codesign -dv --verbose=4 "$APP/Contents/Library/HelperTools/wthinkvpn-helper" 2>&1 \
+helper_id=$(codesign -dv --verbose=4 "$APP/Contents/Library/HelperTools/oc-gui-helper" 2>&1 \
     | sed -n 's/^Identifier=//p')
 app_id=$(codesign -dv --verbose=4 "$APP" 2>&1 | sed -n 's/^Identifier=//p')
 [ "$helper_id" = "$HELPER_ID" ] \
@@ -212,7 +212,7 @@ mach=$(/usr/libexec/PlistBuddy -c "Print :MachServices:$DAEMON_PLIST" "$PLIST_IN
     || { echo "  FAIL plist 缺少 MachServices:$DAEMON_PLIST"; fail=1; }
 
 # 6. plist 里的 Team ID 确实被替换掉了占位符
-plist_team=$(/usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:WTHINKVPN_TEAM_ID" \
+plist_team=$(/usr/libexec/PlistBuddy -c "Print :EnvironmentVariables:OCGUI_TEAM_ID" \
     "$PLIST_IN_APP" 2>/dev/null || echo "")
 [ "$plist_team" = "$TEAM_ID" ] \
     && echo "  ok   plist Team ID 已注入 ($plist_team)" \
@@ -227,7 +227,7 @@ else
 fi
 
 # 8. helper 无 setuid 位（提权走 XPC，不靠 setuid）
-hmode=$(stat -f '%Lp' "$APP/Contents/Library/HelperTools/wthinkvpn-helper")
+hmode=$(stat -f '%Lp' "$APP/Contents/Library/HelperTools/oc-gui-helper")
 case "$hmode" in
     [467][0-7][0-7][0-7][0-7])
         echo "  FAIL helper 带 setuid 位 (mode=$hmode)"; fail=1 ;;
@@ -265,7 +265,7 @@ else
 
 本地运行不需要公证；分发给其他机器则必须：
     Scripts/sign-macos.sh --team-id $TEAM_ID --notarize \\
-        --apple-id you@example.com --password @keychain:WTHINK_APP_SPECIFIC_PW
+        --apple-id you@example.com --password @keychain:OCGUI_APP_SPECIFIC_PW
 
 公证要求 App Store Connect 上有 App ID，且 Team ID 一致。
 EOF
@@ -279,7 +279,7 @@ cat <<EOF
 首次使用特权助手：
     1. GUI 点「提权启动」
     2. 打开「系统设置 → 通用 → 登录项」
-    3. 打开 WthinkVPN 的开关  ← SMAppService 不弹密码框，这一步必须用户手动做
+    3. 打开 OC GUI 的开关  ← SMAppService 不弹密码框，这一步必须用户手动做
 
 验证：
     /Applications/$APP_NAME.app/Contents/MacOS/macosctl status

@@ -2,11 +2,11 @@
 //!
 //! 注意：不启动 Tauri（避免弹窗），直接复用 Repo/Vault/argv。
 
-use wthinkvpn_lib::profile::{Profile, Repo, SecretKind};
-use wthinkvpn_lib::{secret, tunnel::argv};
+use oc_gui::profile::{Profile, Repo, SecretKind};
+use oc_gui::{secret, tunnel::argv};
 
 fn main() {
-    let dir = std::env::temp_dir().join(format!("wthinkvpn-smoke-{}", std::process::id()));
+    let dir = std::env::temp_dir().join(format!("oc-gui-smoke-{}", std::process::id()));
     let repo = Repo::new(&dir);
 
     // 1. 空库
@@ -16,7 +16,7 @@ fn main() {
     let mut p = Profile::new("smoke-1", "公司 VPN", "127.0.0.1:8443/");
     p.username = Some("testuser".into());
     p.remember_password = true;
-    let store = wthinkvpn_lib::profile::Store { profiles: vec![p.clone()] };
+    let store = oc_gui::profile::Store { profiles: vec![p.clone()] };
     repo.save(&store).unwrap();
     println!("[ok] save profile");
 

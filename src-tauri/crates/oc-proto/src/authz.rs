@@ -34,7 +34,7 @@
 //!
 //! | 平台 | 机制 | 校验什么 |
 //! |---|---|---|
-//! | Linux | polkit action（`org.wthink.wthinkvpn-helper`） | 调用方的 uid / 进程签名 |
+//! | Linux | polkit action（`org.github.rediceli.ocgui-helper`） | 调用方的 uid / 进程签名 |
 //! | macOS | privileged XPC + code signature | connecting process 的 designated requirement |
 //! | Windows | 提权启动的 helper + named pipe DACL | pipe 的 DACL + 客户端 SID |
 //!
@@ -63,7 +63,7 @@ pub struct PeerCredentials {
 /// 仅用于「以普通用户跑 helper 做本地测试」这一场景。生产部署中
 /// helper 恒为 root，此检查永不触发，因此**不可**放宽到生产路径。
 fn dev_allow_self() -> bool {
-    std::env::var("WTHINKVPN_DEV_ALLOW_SELF").as_deref() == Ok("1")
+    std::env::var("OCGUI_DEV_ALLOW_SELF").as_deref() == Ok("1")
 }
 
 /// 授权决策
@@ -75,8 +75,8 @@ pub enum AuthDecision {
 }
 
 /// polkit action id。安装到
-/// `/usr/share/polkit-1/actions/org.wthink.wthinkvpn-helper.policy`
-pub const POLKIT_ACTION: &str = "org.wthink.wthinkvpn-helper";
+/// `/usr/share/polkit-1/actions/org.github.rediceli.ocgui-helper.policy`
+pub const POLKIT_ACTION: &str = "org.github.rediceli.ocgui-helper";
 
 /// 允许调用 helper 的 uid 列表。
 ///
@@ -84,7 +84,7 @@ pub const POLKIT_ACTION: &str = "org.wthink.wthinkvpn-helper";
 /// （因为 socket 是 0600 root），等于 helper 不可用。这是刻意的：
 /// 「静默允许所有用户」比「默认不可用」危险得多。
 pub fn allowed_uids() -> Vec<u32> {
-    std::env::var("WTHINKVPN_ALLOWED_UIDS")
+    std::env::var("OCGUI_ALLOWED_UIDS")
         .ok()
         .map(|s| {
             s.split(',')
@@ -102,7 +102,7 @@ pub fn allowed_uids() -> Vec<u32> {
 /// ⚠️ 开发模式下 helper 以普通用户身份运行时，`self_uid == peer.uid`
 /// 会把**所有**本地连接都判成「自身」。这不是 bug 而是非 root 运行的
 /// 固有歧义 —— 真实部署里 helper 恒为 root，两者不可能相等。
-/// 生产部署用 `WTHINKVPN_DEV_ALLOW_SELF=1` 之外的路径即可；
+/// 生产部署用 `OCGUI_DEV_ALLOW_SELF=1` 之外的路径即可；
 /// 开发模式请设置该变量跳过此检查。
 pub fn authorize(
     peer: PeerCredentials,
@@ -122,7 +122,7 @@ pub fn authorize(
     if allowed.is_empty() {
         return AuthDecision::Deny {
             reason: format!(
-                "未配置允许列表（{POLKIT_ACTION}）；请设置 WTHINKVPN_ALLOWED_UIDS"
+                "未配置允许列表（{POLKIT_ACTION}）；请设置 OCGUI_ALLOWED_UIDS"
             ),
         };
     }
@@ -254,7 +254,7 @@ pub fn create_per_user_socket(_uid: u32) -> io::Result<()> {
 /// `authorize()` 会按 uid 拒绝未列入允许列表的人。**两层防护缺一不可**：
 /// socket 权限挡住普通用户，uid 白名单挡住同组内的其他人。
 ///
-/// 更严格的做法是每个授权用户一个 socket（`/run/wthinkvpn-<uid>.sock`），
+/// 更严格的做法是每个授权用户一个 socket（`/run/oc-gui-<uid>.sock`），
 /// 权限 `0600` + 属主该 uid —— 授权结果直接编码在文件系统里，没有
 /// 「先连上再被拒」的中间态。推荐生产环境采用这个。
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -285,13 +285,13 @@ pub mod pipe_dacl {
 /// 每用户 IPC 端点的名字。
 ///
 /// 三平台各有各的机制，但「授权结果编码在命名/权限里」的原则一致：
-/// - Linux：`/run/wthinkvpn/helper-<uid>.sock`，`0600` + 属主该 uid
-/// - Windows：`\\\\.\\pipe\\WthinkVPN-<sid>`，DACL 只放行该 SID
+/// - Linux：`/run/oc-gui/helper-<uid>.sock`，`0600` + 属主该 uid
+/// - Windows：`\\\\.\\pipe\\OC GUI-<sid>`，DACL 只放行该 SID
 /// - macOS：Mach service + `SecCode` 校验（见 macos-helper）
 pub const ENDPOINT_PREFIX: &str = "helper";
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-pub const RUNTIME_DIR: &str = "/run/wthinkvpn";
+pub const RUNTIME_DIR: &str = "/run/oc-gui";
 
 /// Linux/macOS：每用户 socket 的绝对路径。
 #[cfg(any(target_os = "linux", target_os = "macos"))]
@@ -307,13 +307,13 @@ pub fn per_user_socket_path(uid: u32) -> std::path::PathBuf {
 /// 靠 DACL 而不是命名空间来隔离。
 #[cfg(target_os = "windows")]
 pub fn per_user_pipe_name(sid_suffix: &str) -> String {
-    format!(r"\.\pipe\WthinkVPN-{ENDPOINT_PREFIX}-{sid_suffix}")
+    format!(r"\.\pipe\OC GUI-{ENDPOINT_PREFIX}-{sid_suffix}")
 }
 
 /// 创建/接管每用户 socket。
 ///
 /// 步骤（Linux）：
-/// 1. `mkdir -p /run/wthinkvpn`，权限 0755 root
+/// 1. `mkdir -p /run/oc-gui`，权限 0755 root
 /// 2. 拒绝已存在的 socket（防 symlink / 抢占）
 /// 3. `bind` 后立刻 `chown(uid)` + `chmod(0600)`
 ///
@@ -485,8 +485,11 @@ mod tests {
 
     #[test]
     fn polkit_action_is_namespaced() {
-        assert!(POLKIT_ACTION.starts_with("org.wthink."));
+        // 反向 DNS 命名空间。这个断言的作用是「重命名时必须同步更新」——
+        // 漏改时 polkit 会找不到 action，授权静默失败（不是编译错误）。
+        assert!(POLKIT_ACTION.starts_with("org.github.rediceli."));
         assert!(!POLKIT_ACTION.contains(' '));
+        assert_eq!(POLKIT_ACTION, "org.github.rediceli.ocgui-helper");
     }
 
     /// 关键安全断言：允许列表永远不能被 argv 影响。

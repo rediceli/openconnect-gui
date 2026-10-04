@@ -21,14 +21,14 @@ use oc_proto::{validate_args, validate_program, HelperError, Request, Response, 
 fn usage() -> ! {
     eprintln!(
         "用法:\n\
-         \x20 wthinkvpn-helper --authorize <uid>    polkit 授权后，为该用户创建 socket 并常驻\n\
-         \x20 wthinkvpn-helper --serve <socket>      开发模式：在指定路径监听（不推荐）\n\
-         \x20 wthinkvpn-helper --selftest           自检（不需要 root）\n\
+         \x20 oc-gui-helper --authorize <uid>    polkit 授权后，为该用户创建 socket 并常驻\n\
+         \x20 oc-gui-helper --serve <socket>      开发模式：在指定路径监听（不推荐）\n\
+         \x20 oc-gui-helper --selftest           自检（不需要 root）\n\
          \n\
          GUI 侧应通过 pkexec 调用 --authorize <自己的 uid>：\n\
-         \x20 pkexec /usr/libexec/wthinkvpn-helper --authorize $(id -u)\n\
+         \x20 pkexec /usr/libexec/oc-gui-helper --authorize $(id -u)\n\
          \n\
-         polkit action: org.wthink.wthinkvpn-helper"
+         polkit action: org.github.rediceli.ocgui-helper"
     );
     std::process::exit(2);
 }
@@ -60,7 +60,7 @@ fn main() {
 ///
 /// # 为什么 socket 路径由 uid 决定
 ///
-/// `/run/wthinkvpn/helper-<uid>.sock`，权限 0600 属主该 uid。
+/// `/run/oc-gui/helper-<uid>.sock`，权限 0600 属主该 uid。
 /// 授权结果直接编码在文件系统权限里：
 /// - 没通过 polkit ⇒ 根本没这个文件
 /// - 通过了 polkit 的 uid ⇒ 只有它能打开
@@ -69,7 +69,7 @@ fn main() {
 /// # 为什么还要再查一遍 uid
 ///
 /// 文件系统权限是第一道防线，`authorize()` 是第二道。两者独立：
-/// 即使 `/run/wthinkvpn` 的目录权限被误配成 0777，
+/// 即使 `/run/oc-gui` 的目录权限被误配成 0777，
 /// socket 本身仍是 0600 + 正确属主。
 fn authorize_and_serve(target_uid: u32) {
     let self_uid = unsafe { libc::geteuid() };
@@ -111,13 +111,13 @@ fn serve(socket_path: &str) {
     if allowed.is_empty() {
         if self_uid == 0 {
             eprintln!(
-                "拒绝启动：未配置 WTHINKVPN_ALLOWED_UIDS，helper 无可用调用方。\n\
-                 例：WTHINKVPN_ALLOWED_UIDS=1000"
+                "拒绝启动：未配置 OCGUI_ALLOWED_UIDS，helper 无可用调用方。\n\
+                 例：OCGUI_ALLOWED_UIDS=1000"
             );
             std::process::exit(2);
         }
         eprintln!(
-            "警告：WTHINKVPN_ALLOWED_UIDS 为空，所有连接都会被 authorize() 拒绝。\n\
+            "警告：OCGUI_ALLOWED_UIDS 为空，所有连接都会被 authorize() 拒绝。\n\
              （当前为非 root 开发模式，继续运行以便本地测试）"
         );
     }
@@ -361,7 +361,7 @@ fn start_openconnect(
     token_secret: Option<String>,
 ) -> Result<Session, Response> {
     // ---- 安全边界 1：程序白名单 ----
-    let program = std::env::var("WTHINKVPN_OPENCONNECT").unwrap_or_else(|_| {
+    let program = std::env::var("OCGUI_OPENCONNECT").unwrap_or_else(|_| {
         if cfg!(target_os = "macos") {
             "/usr/local/bin/openconnect".into()
         } else {
@@ -599,7 +599,7 @@ fn write_token_secret(secret: &str) -> std::io::Result<PathBuf> {
                 ALPHABET[n] as char
             })
             .collect();
-        let path = dir.join(format!("wthinkvpn-token-{name}"));
+        let path = dir.join(format!("oc-gui-token-{name}"));
         match std::fs::OpenOptions::new()
             .write(true)
             .create_new(true)

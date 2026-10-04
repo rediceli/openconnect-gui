@@ -15,16 +15,16 @@
 //!   SH
 //!   chmod +x /tmp/fakeoc/openconnect
 //!
-//!   WTHINKVPN_ALLOWED_UIDS=$(id -u) WTHINKVPN_OPENCONNECT=/tmp/fakeoc/openconnect \
-//!     ./helper/target/release/wthinkvpn-helper --serve /tmp/wthinkvpn-helper-$(id -u).sock &
+//!   OCGUI_ALLOWED_UIDS=$(id -u) OCGUI_OPENCONNECT=/tmp/fakeoc/openconnect \
+//!     ./helper/target/release/oc-gui-helper --serve /tmp/oc-gui-helper-$(id -u).sock &
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-use wthinkvpn_lib::channel::{self, Channel, StreamEvent};
-use wthinkvpn_lib::ipc::client::HelperHandle;
-use wthinkvpn_lib::profile::Profile;
-use wthinkvpn_lib::tunnel::{argv, Secrets};
+use oc_gui::channel::{self, Channel, StreamEvent};
+use oc_gui::ipc::client::HelperHandle;
+use oc_gui::profile::Profile;
+use oc_gui::tunnel::{argv, Secrets};
 
 fn main() {
     let ca = std::env::args().nth(1).unwrap_or_default();
@@ -68,7 +68,7 @@ fn main() {
                 println!("[finished] state={state:?} cause={:?}", cause.is_some());
                 // Stop 路径下 helper 发的是 State{Idle}（而非 Exited）——
                 // 因为那不是「进程自己退了」，是「我们让它退的」。
-                if state == wthinkvpn_lib::tunnel::State::Idle {
+                if state == oc_gui::tunnel::State::Idle {
                     done2.store(true, Ordering::SeqCst);
                 }
             }

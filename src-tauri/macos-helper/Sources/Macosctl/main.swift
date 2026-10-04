@@ -53,7 +53,7 @@ if args.count > 1 {
                 printResponse(.state(
                     state: describe(after),
                     cause: after == .requiresApproval
-                        ? "请在「系统设置 → 通用 → 登录项」批准 WthinkVPN" : nil))
+                        ? "请在「系统设置 → 通用 → 登录项」批准 OC GUI" : nil))
             } catch {
                 fail(error.localizedDescription)
             }
@@ -115,9 +115,9 @@ do {
     guard case let .ready(version, _, _) = hello else {
         fail("helper 握手返回了非 ready")
     }
-    guard version == WthinkProtocol.version else {
+    guard version == OcProtocol.version else {
         printResponse(.failed(error: .protocolMismatch(
-            expected: WthinkProtocol.version, got: version)))
+            expected: OcProtocol.version, got: version)))
         exit(1)
     }
 } catch let e as XPCClientError {
@@ -163,7 +163,7 @@ for line in text.split(separator: "\n") {
 
 func selftest() {
     // 协议往返
-    let req = WRequest.hello(version: WthinkProtocol.version, callerUID: 501)
+    let req = WRequest.hello(version: OcProtocol.version, callerUID: 501)
     guard let d = try? JSONEncoder().encode(req),
         let back = try? JSONDecoder().decode(WRequest.self, from: d),
         case .hello(let v, let uid) = back, v == 1, uid == 501
@@ -181,8 +181,8 @@ func selftest() {
     }
 
     // Team ID 必须存在，否则 helper 会拒绝所有连接
-    if Bundle.main.object(forInfoDictionaryKey: "WthinkVPNTeamID") == nil,
-        ProcessInfo.processInfo.environment["WTHINKVPN_TEAM_ID"] == nil {
+    if Bundle.main.object(forInfoDictionaryKey: "OcGuiTeamID") == nil,
+        ProcessInfo.processInfo.environment["OCGUI_TEAM_ID"] == nil {
         FileHandle.standardError.write(Data("""
         selftest 通过，但未检测到 Team ID。
         helper 会拒绝所有连接 —— 请用 Scripts/sign-macos.sh 构建。

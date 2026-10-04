@@ -280,9 +280,9 @@ pub struct Repo {
 
 impl Repo {
     /// 系统标准配置目录：
-    /// - macOS `~/Library/Application Support/WthinkVPN/`
-    /// - Windows `%APPDATA%\WthinkVPN\`
-    /// - Linux `$XDG_CONFIG_HOME/wthinkvpn/`
+    /// - macOS `~/Library/Application Support/OC GUI/`
+    /// - Windows `%APPDATA%\OC GUI\`
+    /// - Linux `$XDG_CONFIG_HOME/oc-gui/`
     pub fn default_dir() -> PathBuf {
         dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
@@ -331,7 +331,7 @@ mod tests {
     use super::*;
 
     fn tmpdir(name: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("wthinkvpn-test-{name}-{}", std::process::id()));
+        let d = std::env::temp_dir().join(format!("oc-gui-test-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         d
     }

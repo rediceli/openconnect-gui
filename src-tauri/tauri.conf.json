@@ -1,15 +1,15 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "WthinkVPN",
+  "productName": "OC GUI",
   "version": "0.1.0",
-  "identifier": "com.wthink.wthinkvpn",
+  "identifier": "io.github.rediceli.ocgui",
   "build": {
     "frontendDist": "../dist"
   },
   "app": {
     "windows": [
       {
-        "title": "WthinkVPN",
+        "title": "OC GUI",
         "width": 430,
         "height": 620,
         "resizable": true,

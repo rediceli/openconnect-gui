@@ -2,9 +2,9 @@
 //!
 //! 用法：cargo run --example e2e_channel
 
-use wthinkvpn_lib::channel::{self, Channel};
-use wthinkvpn_lib::profile::Profile;
-use wthinkvpn_lib::tunnel::{argv, Secrets};
+use oc_gui::channel::{self, Channel};
+use oc_gui::profile::Profile;
+use oc_gui::tunnel::{argv, Secrets};
 
 fn main() {
     let uid = channel::current_uid();
@@ -24,7 +24,7 @@ fn main() {
     );
 
     // Direct 模式下程序不存在应给出明确错误
-    unsafe { std::env::set_var("WTHINKVPN_OPENCONNECT", "/nonexistent/openconnect") };
+    unsafe { std::env::set_var("OCGUI_OPENCONNECT", "/nonexistent/openconnect") };
     let mut ch2 = Channel::detect(uid);
 
     let mut p = Profile::new("e2e-ch", "test", "vpn.invalid");

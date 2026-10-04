@@ -6,7 +6,7 @@ import XCTest
 /// 这些形状必须与 Rust 侧 `src/ipc.rs` 逐字段一致 —— 任何一侧改了
 /// 字段名而另一侧没改，症状是「连接建立后收不到任何应答」，
 /// 极难排查。故用测试固化。
-final class WthinkProtocolTests: XCTestCase {
+final class OcProtocolTests: XCTestCase {
     func decode(_ json: String) throws -> WResponse {
         try JSONDecoder().decode(WResponse.self, from: Data(json.utf8))
     }
@@ -124,6 +124,6 @@ final class WthinkProtocolTests: XCTestCase {
 
     func testVersionMatchesRustSide() {
         // Rust 侧 src/ipc.rs: PROTOCOL_VERSION = 1
-        XCTAssertEqual(WthinkProtocol.version, 1)
+        XCTAssertEqual(OcProtocol.version, 1)
     }
 }

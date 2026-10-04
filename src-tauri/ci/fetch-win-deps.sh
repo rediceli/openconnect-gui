@@ -220,7 +220,7 @@ log "5/5 生成 MANIFEST.txt"
 # ---------------------------------------------------------------------------
 # Tauri 会把 win-deps/ 打进安装包。MANIFEST 让「装了什么」可审计。
 {
-    echo "# WthinkVPN Windows 运行时依赖"
+    echo "# OC GUI Windows 运行时依赖"
     echo "# 生成时间: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
     echo "# openconnect: $OPENCONNECT_VER (master 交叉编译)"
     echo "# wintun: $WINTUN_VERSION (sha256 $WINTUN_SHA256)"

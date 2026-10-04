@@ -7,9 +7,9 @@ import Foundation
 ///
 /// # 两个来源，按优先级
 ///
-/// 1. **环境变量 `WTHINKVPN_TEAM_ID`** —— 由 `Scripts/sign-macos.sh`
+/// 1. **环境变量 `OCGUI_TEAM_ID`** —— 由 `Scripts/sign-macos.sh`
 ///    写进 launchd plist 的 `EnvironmentVariables`。这是实际生效的来源。
-/// 2. Info.plist 的 `WthinkVPNTeamID` —— 仅作文档/调试用。
+/// 2. Info.plist 的 `OcGuiTeamID` —— 仅作文档/调试用。
 ///
 /// # 为什么不用 `-sectcreate __TEXT __info_plist`
 ///
@@ -22,12 +22,12 @@ import Foundation
 /// 用它更直接，也更容易在排查时 `launchctl print` 看到。
 enum Config {
     static let teamID: String? = {
-        if let v = ProcessInfo.processInfo.environment["WTHINKVPN_TEAM_ID"],
+        if let v = ProcessInfo.processInfo.environment["OCGUI_TEAM_ID"],
             !v.isEmpty
         {
             return v
         }
-        if let v = Bundle.main.object(forInfoDictionaryKey: "WthinkVPNTeamID") as? String,
+        if let v = Bundle.main.object(forInfoDictionaryKey: "OcGuiTeamID") as? String,
             !v.isEmpty
         {
             return v
@@ -35,5 +35,5 @@ enum Config {
         return nil
     }()
 
-    static let machService = "io.wthink.wthinkvpn.helper"
+    static let machService = "io.github.rediceli.ocgui.helper"
 }

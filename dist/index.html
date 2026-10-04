@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>WthinkVPN</title>
+<title>OC GUI</title>
 <style>
   :root{
     --bg:#f5f6f8; --card:#fff; --line:#e3e5e9; --text:#1c1e21; --muted:#6b7280;
@@ -72,7 +72,7 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>WthinkVPN</h1>
+  <h1>OC GUI</h1>
 
   <div class="tabs">
     <button id="tab-conn" class="on" onclick="tab('conn')">连接</button>
@@ -403,7 +403,7 @@ async function startHelper() {
       // macOS 的 SMAppService 不会弹密码框 ——
       // 必须在「系统设置 → 通用 → 登录项」手动批准。
       $("helper-msg").textContent =
-        "请到「系统设置 → 通用 → 登录项」打开 WthinkVPN 的开关（系统状态：" + state + "）";
+        "请到「系统设置 → 通用 → 登录项」打开 OC GUI 的开关（系统状态：" + state + "）";
       btn.textContent = "打开系统设置";
       btn.onclick = () => invoke("open_system_settings");
     } else {

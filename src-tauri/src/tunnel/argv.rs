@@ -354,10 +354,10 @@ pub fn build(profile: &Profile, secrets: &Secrets) -> ArgPlan {
 
 /// 占位参数。`fatal_error` 非空时 supervisor 会直接拒绝启动，
 /// 不实际执行 —— 但 argv 仍需合法以通过类型检查。
-const INVALID_CONFIG_FILE: &str = "--__wthinkvpn_invalid_config";
+const INVALID_CONFIG_FILE: &str = "--__ocgui_invalid_config";
 
 /// 令牌 secret 的临时文件路径（由 helper 以 0600 创建）。
-pub const TOKEN_SECRET_FILE: &str = "/run/wthinkvpn/token.secret";
+pub const TOKEN_SECRET_FILE: &str = "/run/oc-gui/token.secret";
 
 /// 构建所需的密钥。由调用方从钥匙串/内存取出。
 #[derive(Debug, Default, Clone)]

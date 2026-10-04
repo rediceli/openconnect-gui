@@ -4,8 +4,8 @@
 //!   python3 docs/mock_gateway.py &
 //!   cargo run --example e2e_cert -- <ca.crt> <cert.pem> <enc.key.pem> <passphrase>
 
-use wthinkvpn_lib::profile::{ClientCert, Profile};
-use wthinkvpn_lib::tunnel::{argv, supervisor};
+use oc_gui::profile::{ClientCert, Profile};
+use oc_gui::tunnel::{argv, supervisor};
 
 fn main() {
     let a: Vec<String> = std::env::args().collect();

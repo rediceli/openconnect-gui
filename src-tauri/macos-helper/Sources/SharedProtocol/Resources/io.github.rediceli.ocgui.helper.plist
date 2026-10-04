@@ -3,7 +3,7 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>io.wthink.wthinkvpn.helper</string>
+  <string>io.github.rediceli.ocgui.helper</string>
 
   <!--
     ⚠️ SMAppService 不使用这个文件来判定调用方。
@@ -15,9 +15,9 @@
   <array>
     <dict>
       <key>Identifier</key>
-      <string>com.wthink.wthinkvpn</string>
+      <string>io.github.rediceli.ocgui</string>
       <key>Requirement</key>
-      <string>identifier "com.wthink.wthinkvpn"</string>
+      <string>identifier "io.github.rediceli.ocgui"</string>
     </dict>
   </array>
 
@@ -30,7 +30,7 @@
 
   <key>MachServices</key>
   <dict>
-    <key>io.wthink.wthinkvpn.helper</key>
+    <key>io.github.rediceli.ocgui.helper</key>
     <true/>
   </dict>
 
@@ -41,7 +41,7 @@
   -->
   <key>EnvironmentVariables</key>
   <dict>
-    <key>WTHINKVPN_TEAM_ID</key>
+    <key>OCGUI_TEAM_ID</key>
     <string>__TEAM_ID__</string>
   </dict>
 

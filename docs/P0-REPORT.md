@@ -1,4 +1,4 @@
-# WthinkVPN — P0 可行性验证报告
+# OC GUI — P0 可行性验证报告
 
 日期：2026-10-03
 环境：macOS 14.8.9 (x86_64) / openconnect v9.21 (Homebrew) / Rust 1.99.0 / Tauri CLI 2.12.1
@@ -77,7 +77,7 @@ profile 级配置，不能硬编码。P1 需要一张「协议 × 表单 id × �
 ## 产物
 
 ```
-wthinkvpn/
+oc-gui/
 ├── .gitignore                     # account.txt 等本地凭据强制忽略
 ├── dist/index.html                # P0 冒烟页
 └── src-tauri/                     # Tauri 2.12.1 骨架，已可打包

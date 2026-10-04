@@ -2710,6 +2710,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "oc-gui"
+version = "0.1.0"
+dependencies = [
+ "base64 0.23.1",
+ "dirs 6.0.0",
+ "keyring",
+ "libc",
+ "log",
+ "oc-proto",
+ "rand",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-log",
+ "tempfile",
+ "toml 0.9.12+spec-1.1.0",
+ "x509-parser",
+]
+
+[[package]]
 name = "oc-proto"
 version = "0.1.0"
 dependencies = [
@@ -5248,29 +5271,6 @@ dependencies = [
  "windows-core",
  "windows-version",
  "x11-dl",
-]
-
-[[package]]
-name = "wthinkvpn"
-version = "0.1.0"
-dependencies = [
- "base64 0.23.1",
- "dirs 6.0.0",
- "keyring",
- "libc",
- "log",
- "oc-proto",
- "rand",
- "rustls",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "tauri",
- "tauri-build",
- "tauri-plugin-log",
- "tempfile",
- "toml 0.9.12+spec-1.1.0",
- "x509-parser",
 ]
 
 [[package]]

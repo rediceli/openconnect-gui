@@ -1,10 +1,12 @@
 [package]
-name = "wthinkvpn-helper"
+name = "oc-gui-helper"
 version = "0.1.0"
 edition = "2024"
+description = "OC GUI Linux 特权助手（polkit + 每用户 socket）"
+license = "Apache-2.0"
 
 [[bin]]
-name = "wthinkvpn-helper"
+name = "oc-gui-helper"
 path = "src/main.rs"
 
 [dependencies]

@@ -1,11 +1,11 @@
-//! WthinkVPN — 基于 openconnect 的跨平台桌面客户端
+//! OC GUI — 基于 openconnect 的跨平台桌面客户端
 //!
 //! 模块职责：
 //! - [`profile`] 连接档案（只存非敏感信息，TOML）
 //! - [`secret`] 系统钥匙串（密码、私钥口令、令牌 secret）
 //! - [`tunnel`] argv 构建、日志事件解析、状态机、子进程监管
 
-pub const APP_DIR: &str = "WthinkVPN";
+pub const APP_DIR: &str = "OC GUI";
 
 pub mod channel;
 pub mod commands;

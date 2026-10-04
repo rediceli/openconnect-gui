@@ -5,7 +5,7 @@
 <policyconfig>
 
   <vendor>Wthink</vendor>
-  <vendor_url>https://example.invalid/wthinkvpn</vendor_url>
+  <vendor_url>https://example.invalid/oc-gui</vendor_url>
   <icon_name>network-vpn</icon_name>
 
   <!--
@@ -28,7 +28,7 @@
 
     这是一个无需提权提示的 root 漏洞。
 
-    本文件的 rule 只做一件事：授权「请求启动 wthinkvpn-helper 这个
+    本文件的 rule 只做一件事：授权「请求启动 oc-gui-helper 这个
     程序」。helper 启动后还会：
       1. 按 uid 校验每个 socket 连接（ipc::authz::authorize）
       2. 按 uid 决定 socket 路径与属主（per_user_socket_path）
@@ -36,10 +36,10 @@
     三层防护缺一不可。
   -->
 
-  <action id="org.wthink.wthinkvpn-helper">
+  <action id="org.github.rediceli.ocgui-helper">
 
-    <description>Start the WthinkVPN privileged helper</description>
-    <description xml:lang="zh_CN">启动 WthinkVPN 特权助手</description>
+    <description>Start the OC GUI privileged helper</description>
+    <description xml:lang="zh_CN">启动 OC GUI 特权助手</description>
 
     <message>Authentication is required to manage network settings (VPN)</message>
     <message xml:lang="zh_CN">需要认证才能管理网络设置（VPN）</message>
@@ -57,7 +57,7 @@
       annotate_auth_admin = true 会让 polkit 在密码框里显示
       「该程序需要管理网络设置」，减少用户困惑。
     -->
-    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/wthinkvpn-helper</annotate>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/oc-gui-helper</annotate>
     <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
 
   </action>
@@ -66,9 +66,9 @@
     GUI 侧辅助 action：仅用于「查询 helper 是否可用」这类只读检查。
     单独拆开是为了让这类检查可以用 auth_admin_keep 而不影响启动路径。
   -->
-  <action id="org.wthink.wthinkvpn-helper.probe">
-    <description>Check whether the WthinkVPN helper is available</description>
-    <description xml:lang="zh_CN">检查 WthinkVPN 特权助手是否可用</description>
+  <action id="org.github.rediceli.ocgui-helper.probe">
+    <description>Check whether the OC GUI helper is available</description>
+    <description xml:lang="zh_CN">检查 OC GUI 特权助手是否可用</description>
     <message>Authentication is required to check VPN helper status</message>
     <message xml:lang="zh_CN">需要认证才能检查 VPN 助手状态</message>
     <defaults>

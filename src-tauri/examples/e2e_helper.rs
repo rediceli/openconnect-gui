@@ -2,14 +2,14 @@
 //!
 //! 前置：
 //!   python3 docs/mock_gateway.py &
-//!   WTHINKVPN_ALLOWED_UIDS=$(id -u) ./helper/target/release/wthinkvpn-helper \
-//!       --serve /tmp/wthinkvpn-helper-$(id -u).sock &
+//!   OCGUI_ALLOWED_UIDS=$(id -u) ./helper/target/release/oc-gui-helper \
+//!       --serve /tmp/oc-gui-helper-$(id -u).sock &
 //!
 //! 用法：
 //!   cargo run --example e2e_helper -- <ca.crt>
 
-use wthinkvpn_lib::ipc::client::HelperHandle;
-use wthinkvpn_lib::ipc::{Request, StdinSecret};
+use oc_gui::ipc::client::HelperHandle;
+use oc_gui::ipc::{Request, StdinSecret};
 
 fn main() {
     let uid = unsafe { libc::getuid() };
@@ -21,7 +21,7 @@ fn main() {
         Err(e) => {
             println!("[info] helper 不可用: {e}");
             println!("       UI 应引导用户执行：");
-            println!("       pkexec /usr/libexec/wthinkvpn-helper --authorize {uid}");
+            println!("       pkexec /usr/libexec/oc-gui-helper --authorize {uid}");
             return;
         }
     }
@@ -36,7 +36,7 @@ fn main() {
         token_secret: None,
     });
     match r {
-        Ok(wthinkvpn_lib::ipc::Response::Failed { error }) => {
+        Ok(oc_gui::ipc::Response::Failed { error }) => {
             println!("[ok] helper 拒绝了危险参数: {error:?}");
         }
         other => panic!("helper 未拒绝危险参数: {other:?}"),

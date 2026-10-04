@@ -2,7 +2,8 @@
 name = "oc-proto"
 version = "0.1.0"
 edition = "2024"
-description = "WthinkVPN GUI <-> privileged helper 协议（无 Tauri 依赖）"
+description = "OC GUI GUI <-> privileged helper 协议（无 Tauri 依赖）"
+license = "Apache-2.0"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

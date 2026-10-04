@@ -25,9 +25,9 @@ set -uo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 ROOT="$(cd "$HERE/../.." && pwd)"
-HELPER="/usr/libexec/wthinkvpn-helper"
-RUNTIME="/run/wthinkvpn"
-POLKIT_ACTION="org.wthink.wthinkvpn-helper"
+HELPER="/usr/libexec/oc-gui-helper"
+RUNTIME="/run/oc-gui"
+POLKIT_ACTION="org.github.rediceli.ocgui-helper"
 
 PASS=0
 FAIL=0
@@ -37,7 +37,7 @@ skip() { echo "  skip $*"; }
 
 [ "$(id -u)" = 0 ] || { echo "必须以 root 运行：sudo $0" >&2; exit 1; }
 
-echo "=== WthinkVPN 特权边界回归测试 ==="
+echo "=== OC GUI 特权边界回归测试 ==="
 echo "root uid=$(id -u)  内核=$(uname -r)"
 echo
 
@@ -123,7 +123,7 @@ echo
 # ---------------------------------------------------------------------------
 echo "[5/8] 创建测试用户"
 # ---------------------------------------------------------------------------
-TEST_USER="wthinkvpn-ci-$$"
+TEST_USER="oc-gui-ci-$$"
 TEST_UID=""
 cleanup() {
     [ -n "$TEST_UID" ] && rm -f "$RUNTIME/helper-$TEST_UID.sock"

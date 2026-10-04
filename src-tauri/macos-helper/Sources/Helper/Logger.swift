@@ -5,7 +5,7 @@ import os.log
 final class Logger {
     static let shared = Logger()
     private let log = OSLog(
-        subsystem: "com.wthink.wthinkvpn.helper", category: "helper")
+        subsystem: "io.github.rediceli.ocgui.helper", category: "helper")
 
     func info(_ msg: String) {
         os_log("%{public}@", log: log, type: .info, msg)

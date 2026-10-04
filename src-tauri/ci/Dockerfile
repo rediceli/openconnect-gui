@@ -1,9 +1,9 @@
 # Linux 特权边界测试容器
 #
 # 构建：
-#   docker build -f ci/Dockerfile -t wthinkvpn-ci src-tauri
+#   docker build -f ci/Dockerfile -t oc-gui-ci src-tauri
 # 运行：
-#   docker run --rm --privileged wthinkvpn-ci
+#   docker run --rm --privileged oc-gui-ci
 #
 # 刻意用 Debian 而不是 Alpine：polkit + pkexec + shadow（useradd）
 # 在 Alpine 上要么没有要么行为不同，会掩盖真实发行版上的问题。

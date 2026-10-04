@@ -126,7 +126,7 @@ fn write_secure_in(dir: &std::path::Path, passphrase: &str) -> std::io::Result<C
         let name: String = (0..16)
             .map(|_| ALPHABET[rand::rng().random_range(0..ALPHABET.len())] as char)
             .collect();
-        let path = dir.join(format!("wthinkvpn-oc-{name}.conf"));
+        let path = dir.join(format!("oc-gui-oc-{name}.conf"));
 
         match std::fs::OpenOptions::new()
             .write(true)
@@ -167,7 +167,7 @@ fn write_secure_in(dir: &std::path::Path, passphrase: &str) -> std::io::Result<C
         let name: String = (0..16)
             .map(|_| ALPHABET[rand::rng().random_range(0..ALPHABET.len())] as char)
             .collect();
-        let path = dir.join(format!("wthinkvpn-oc-{name}.conf"));
+        let path = dir.join(format!("oc-gui-oc-{name}.conf"));
         let content = render(passphrase).map_err(std::io::Error::other)?;
         match std::fs::OpenOptions::new()
             .write(true)

@@ -12,8 +12,8 @@
 //! cargo run --example e2e_argv -- <profile.toml>
 //! ```
 
-use wthinkvpn_lib::profile::Profile;
-use wthinkvpn_lib::tunnel::argv;
+use oc_gui::profile::Profile;
+use oc_gui::tunnel::argv;
 
 fn main() {
     let path = std::env::args().nth(1).expect("用法: e2e_argv <profile.toml>");

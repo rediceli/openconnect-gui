@@ -1,0 +1,29 @@
+OC GUI
+Copyright 2026 Redice Li
+
+This product includes software developed as part of the OC GUI project
+(https://github.com/rediceli/openconnect-gui).
+
+## Third-party runtime dependency
+
+OC GUI does not link against or bundle OpenConnect. It launches the
+`openconnect` executable as a separate process and communicates with it
+over stdin/stdout and command-line arguments.
+
+  OpenConnect
+  Copyright (C) 2008-2015 Intel Corporation
+  Licensed under the GNU Lesser General Public License, version 2.1
+  https://www.infradead.org/openconnect/licence.html
+
+Because OpenConnect is invoked as a separate process rather than linked
+into this work, OC GUI is an independent work under the Apache License
+2.0 and is not a derivative work of OpenConnect.
+
+## Trademarks
+
+AnyConnect and Cisco are trademarks of Cisco Systems, Inc. This project is
+not affiliated with or endorsed by Cisco Systems, Inc. It implements a
+protocol compatible with Cisco AnyConnect so that users can connect to
+gateways they are already entitled to access.
+
+OpenWRT is a registered trademark of OpenWrt.org.

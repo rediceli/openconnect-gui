@@ -2,15 +2,15 @@
 //!
 //! 前置：
 //!   python3 docs/mock_gateway.py &
-//!   WTHINKVPN_ALLOWED_UIDS=$(id -u) WTHINKVPN_OPENCONNECT=/usr/local/bin/openconnect \
-//!     ./helper/target/release/wthinkvpn-helper --serve /tmp/wthinkvpn-helper-$(id -u).sock &
+//!   OCGUI_ALLOWED_UIDS=$(id -u) OCGUI_OPENCONNECT=/usr/local/bin/openconnect \
+//!     ./helper/target/release/oc-gui-helper --serve /tmp/oc-gui-helper-$(id -u).sock &
 //!
 //! 用法：cargo run --example e2e_logstream -- <ca.crt>
 
-use wthinkvpn_lib::channel::{self, Channel, StreamEvent};
-use wthinkvpn_lib::ipc::client::HelperHandle;
-use wthinkvpn_lib::profile::Profile;
-use wthinkvpn_lib::tunnel::{argv, Secrets};
+use oc_gui::channel::{self, Channel, StreamEvent};
+use oc_gui::ipc::client::HelperHandle;
+use oc_gui::profile::Profile;
+use oc_gui::tunnel::{argv, Secrets};
 
 fn main() {
     let ca = std::env::args().nth(1).expect("usage: e2e_logstream <ca.crt>");
