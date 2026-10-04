@@ -42,6 +42,15 @@ PLIST="/Library/LaunchDaemons/$LABEL.plist"
 SOCKDIR="/var/run/oc-gui"
 
 die() { printf '\033[1;31m错误:\033[0m %s\n' "$*" >&2; exit 1; }
+warn_root_owned_target() {
+  local t="$1/target"
+  [[ -d "$t" ]] || return 0
+  if [[ ! -O "$t" ]]; then
+    printf '\033[1;33m注意:\033[0m %s 属于 %s —— 之后普通用户跑 cargo build 会因权限失败。\n' \
+      "$t" "$(stat -f '%Su' "$t")" >&2
+    printf '      修复：sudo chown -R "$(id -un)":staff %s\n' "$t" >&2
+  fi
+}
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 
 [[ "$(id -u)" -eq 0 ]] || die "需要 root：sudo $0 [uid...]"
@@ -113,10 +122,80 @@ for u in "${UIDS[@]}"; do
 done
 
 # ── 2. 构建 helper ────────────────────────────────────────────
-log "构建 helper (release)"
-( cd "$SRC" && cargo build --release ) || die "构建失败"
-
+#
+# ⚠️ **sudo 会重置 PATH**，`~/.cargo/bin` 因此不在里面。实测踩过：
+#    `sudo ./install-macos-daemon.sh` 直接报 `cargo: command not found`。
+#
+# 而且不能简单地用 `$HOME/.cargo/bin` —— sudo 下 `$HOME` 是 **root 的**
+# 家目录，不是调用者的。所以要从 `$SUDO_USER` 反查它的家目录。
+#
+# 策略：**优先用已构建好的产物**，必要时才现场构建。
+#
+# ⚠️ 两个实测踩到的坑：
+#
+# 1. `sudo` 重置 PATH，`~/.cargo/bin` 不在里面 →
+#    `cargo: command not found`。
+#    且不能用 $HOME 兜底 —— sudo 下它是 **root 的** 家目录，
+#    必须从 `$SUDO_USER` 反查。
+#
+# 2. 即便用绝对路径找到 cargo，以 root 运行时 rustup 又会去找
+#    `$RUSTUP_HOME`（默认 `$HOME/.rustup` = `/var/root/.rustup`），
+#    同样失败。所以构建时必须一并把 CARGO_HOME / RUSTUP_HOME
+#    指回调用者的家目录。
+#
+# ⚠️ **更重要的：尽量不要以 root 构建。** 那会让
+# `helper/target/` 变成 root 所有，之后普通用户再跑
+# `cargo build` 会因权限失败。所以推荐流程是：
+#
+#     cargo build --release --manifest-path src-tauri/helper/Cargo.toml   # 普通用户
+#     sudo src-tauri/Scripts/install-macos-daemon.sh                        # 再 sudo 安装
+#
 BIN="$SRC/target/release/oc-gui-helper"
+
+invoking_home() {
+  local h=""
+  if [[ -n "${SUDO_USER:-}" ]]; then
+    # macOS 没有 getent；两者都试只为兼容 Linux
+    h="$(dscl . -read "/Users/$SUDO_USER" NFSHomeDirectory 2>/dev/null |
+         awk '/NFSHomeDirectory:/{print $2}')"
+    [[ -z "$h" ]] && h="$(getent passwd "$SUDO_USER" 2>/dev/null | cut -d: -f6)"
+  fi
+  printf '%s' "${h:-$HOME}"
+}
+
+find_cargo() {
+  local c h
+  if command -v cargo >/dev/null 2>&1; then command -v cargo; return 0; fi
+  h="$(invoking_home)"
+  for c in "$h/.cargo/bin/cargo" \
+           /opt/homebrew/bin/cargo \
+           /usr/local/bin/cargo \
+           "$h"/.rustup/toolchains/*/bin/cargo; do
+    [[ -x "$c" ]] && { printf '%s\n' "$c"; return 0; }
+  done
+  return 1
+}
+
+if [[ -x "$BIN" ]]; then
+  log "使用已构建好的 helper：$BIN"
+  log "  （如需重新构建，请以普通用户运行："
+  log "   cargo build --release --manifest-path src-tauri/helper/Cargo.toml ）"
+elif CARGO_BIN="$(find_cargo)"; then
+  H="$(invoking_home)"
+  log "未找到预构建产物，现场构建 — $CARGO_BIN"
+  # rustup / cargo 都按 $HOME 找自己的目录，必须指回调用者
+  export CARGO_HOME="${CARGO_HOME:-$H/.cargo}"
+  export RUSTUP_HOME="${RUSTUP_HOME:-$H/.rustup}"
+  ( cd "$SRC" && "$CARGO_BIN" build --release ) \
+    || die "构建失败（注意：建议改为先以普通用户构建，再 sudo 安装）"
+  warn_root_owned_target "$SRC"
+else
+  die "找不到已构建的 helper，也没有 cargo。
+    请先以**普通用户**构建（不要用 sudo，否则 target/ 会变成 root 所有）：
+      cargo build --release --manifest-path $SRC/Cargo.toml
+    再重新运行本脚本。"
+fi
+
 [[ -x "$BIN" ]] || die "找不到构建产物: $BIN"
 
 # ── 3. 停掉旧实例（若有）────────────────────────────────────────
