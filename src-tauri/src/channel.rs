@@ -504,6 +504,17 @@ impl Channel {
                 //
                 // 同一份 `oc_proto::validate_args` 让两条通道行为一致，
                 // 也让这个不变量只需在一处实现。
+                //
+                // 校验对象是 `plan.args`（即 profile 能控制的范围），
+                // **不含**下面由本进程自己追加的 `--script`。
+                // 顺序很重要：先校验再追加。
+                //
+                // Direct 通道跑的是 GUI 用户身份，所以它自己加的
+                // `--script`（路径由 `resolve_vpnc_script` 从
+                // openconnect 安装位置推导，不来自 profile）不构成
+                // 提权。但 Helper 通道里同样东西会是 root —— 所以
+                // `--script` 被列入 validate_args 的禁用清单，
+                // helper 只能用自己的编译期内置路径。
                 crate::ipc::validate_args(&plan.args, &plan.server)
                     .map_err(|e| ChannelError::Rejected(e.to_string()))?;
 

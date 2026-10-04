@@ -3,10 +3,12 @@
 #
 # # 为什么必须 root
 #
-# openconnect 要创建 tun 设备（macOS 上是 /dev/tun），这是 root 专属
-# 操作。App 正常流程走已签名的 privileged helper，但那条路需要
-# Developer ID 证书（SMAppService），本机没有 —— 所以这个脚本是
-# **手工验证通道**用的，不替代 App 的正常路径。
+# openconnect 要分配 utun 设备，这是 root 专属操作（实测：非 root
+# connect() 到 utun control socket 返回 EPERM）。
+#
+# App 的正常路径是 `Scripts/install-macos-daemon.sh` 装一个免签名的
+# root LaunchDaemon，由它代跑 openconnect。本脚本是**手工验证通道**，
+# 不替代那条路 —— 它每次都要 sudo。
 #
 # # 用法
 #
@@ -31,7 +33,7 @@ ACCOUNT="${1:-}"
 [[ -n "$ACCOUNT" ]] || { echo "用法: sudo $0 <account.txt>" >&2; exit 64; }
 [[ -r "$ACCOUNT" ]] || { echo "读不到 $ACCOUNT" >&2; exit 66; }
 
-[[ "$(id -u)" -eq 0 ]] || { echo "需要 root（创建 tun 设备）" >&2; exit 77; }
+[[ "$(id -u)" -eq 0 ]] || { echo "需要 root（openconnect 分配 utun 设备需要 root）" >&2; exit 77; }
 
 TMP="$(mktemp -d)"
 LOG="$TMP/openconnect.log"
@@ -50,11 +52,6 @@ cleanup() {
     done
     kill -KILL "$OC_PID" 2>/dev/null || true
     wait "$OC_PID" 2>/dev/null || true
-  fi
-  # 只删我们自己创建的 tun
-  if [[ "${WE_CREATED_TUN:-0}" == "1" ]]; then
-    echo "── 清理 /dev/tun ──"
-    rm -f /dev/tun
   fi
   rm -rf "$TMP"
   exit $rc
@@ -86,18 +83,28 @@ OC="$(command -v openconnect || true)"
 [[ -n "$OC" ]] || { echo "未找到 openconnect" >&2; exit 69; }
 echo "openconnect: $($OC --version 2>&1 | head -1)"
 
-# ── /dev/tun ───────────────────────────────────────────────────
-# macOS 内核自带 tun 支持，但没有 /dev/tun 设备节点，必须手工创建。
-# char 设备 major=10 minor=200 是 macOS 的 tun（Linux 是 10/200 恰好
-# 同值，但 FreeBSD 派生要小心 —— macOS 上实测 10/200 可用）。
-WE_CREATED_TUN=0
-if [[ ! -c /dev/tun ]]; then
-  echo "── 创建 /dev/tun (c 10 200) ──"
-  mknod /dev/tun c 10 200
-  chmod 600 /dev/tun
-  WE_CREATED_TUN=1
+# ── /dev/tun：macOS 上不需要 ─────────────────────────────────────
+#
+# 早期版本这里会 `mknod /dev/tun c 10 200`，那是**错的**。
+#
+# openconnect 在 macOS 上默认走 utun：`tun.c` 里
+#   socket(PF_SYSTEM, SOCK_DGRAM, SYSPROTO_CONTROL)
+#   + UTUN_CONTROL_NAME
+# `/dev/tun`（BSD 路径）只在**显式**指定 `--interface=tun*` 时才走到
+# （`if vpninfo->ifname` 以 "tun" 开头 → goto do_bsdtun）。
+#
+# 实测印证：带 /dev/tun 的那次运行，openconnect 建的是 `utun6`，
+# 那个设备节点从未被使用。
+#
+# 但**仍然需要 root** —— utun 的分配本身要 root：
+# 非 root 调 connect() 到 utun control socket 会返回 EPERM
+# （本机 macOS 14.8.9 实测）。所以 sudo 跑本脚本依旧必要，
+# 只是理由与步骤都与原先的注释不同。
+if [[ -e /dev/tun ]]; then
+  echo "/dev/tun 存在（本脚本不需要它，仅供参考）"
+else
+  echo "/dev/tun 不存在 —— 正常，macOS 上 openconnect 用 utun，不需要它"
 fi
-ls -l /dev/tun
 
 # ── 组装参数 ───────────────────────────────────────────────────
 # 与 App 的 argv::build 保持一致：凭据只走 stdin。

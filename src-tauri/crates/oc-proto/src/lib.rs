@@ -202,11 +202,36 @@ pub fn validate_args(args: &[String], server: &str) -> Result<(), HelperError> {
     }
 
     // 被禁的开关：能让 openconnect 变成通用执行器
+    //
+    // ⚠️ `--script` 与 `--vpnc-script` 必须在列表里。openconnect 会
+    // **以当前进程的权限**执行 vpnc-script 去配路由 —— 在 helper 里
+    // 那是 root。所以客户端只要能塞进 `--script=/tmp/x.sh`，
+    // 就等于拿到了 root 代码执行。
+    //
+    // 实测踩过：这两个原本**不在**列表里，`validate_args` 直接放行。
+    // 现有 helper 恰好没有传 `--script`（用 openconnect 内置默认路径），
+    // 所以没被触发 —— 但那是「恰好安全」，不是「设计上安全」。
+    // GUI 侧 Direct 通道确实会传 `--script`（见 channel.rs），
+    // 说明这个参数在协议里是合法存在的，缺了校验迟早被利用。
+    //
+    // helper 自己需要 vpnc-script 时怎么办：它应当使用**编译期确定
+    // 的路径**，且该路径的校验不依赖客户端输入。这与既有原则一致 ——
+    // token secret 也是「helper 写 0600 文件，GUI 不指定路径」。
     const FORBIDDEN: &[&str] = &[
-        "--script-tun", // 与 --script 组合可劫持数据通道
+        "--script-tun",    // 与 --script 组合可劫持数据通道
         "--external-browser", // 可指定任意程序
-        "--csd-wrapper",      // 可执行任意脚本
+        "--csd-wrapper",   // 可执行任意脚本
+        "--script",        // 以 root 执行任意脚本
+        "--vpnc-script",   // 同上（openconnect 的另一个别名）
     ];
+    //
+    // 匹配按 `=` 截断后比对**参数名**，所以 `--script=/x`、`--script-tun`
+    // 与 `--script-tun=<任意值>` 全部命中。
+    //
+    // 这对布尔开关意味着 `--script-tun=false` 也被拒。这是**有意的**：
+    // 我们要的是「这个开关完全不出现」，而不是「它被设为某个值」。
+    // openconnect 的布尔否定形式是 `--no-script-tun`，那个不在禁用
+    // 清单里 —— 但它只是关闭 script-tun，本身无害。
     for a in args {
         let flag = a.split('=').next().unwrap_or(a);
         if FORBIDDEN.contains(&flag) {
@@ -301,6 +326,49 @@ mod tests {
         let a = args(&[" --csd-wrapper=evil"]);
         let flag = a[0].split('=').next().unwrap_or("");
         assert!(flag.trim() == "--csd-wrapper");
+    }
+
+    /// helper 以 root 运行 openconnect，而 openconnect 会**以自身权限**
+    /// 执行 `--script` 指定的 vpnc-script 去配路由。所以客户端能塞进
+    /// `--script` 就等于拿到了 root 代码执行。
+    ///
+    /// 实测踩过：`--script` 与 `--vpnc-script` 原本都不在禁用清单里，
+    /// `validate_args` 直接放行。当时没被触发只是因为 helper 恰好
+    /// 没传这个参数（用 openconnect 内置默认路径）—— 那是「恰好安全」。
+    /// 而 GUI 的 Direct 通道确实会传 `--script`，说明它在协议里合法
+    /// 存在，缺校验迟早被利用。
+    #[test]
+    fn rejects_scripts_that_run_as_root() {
+        for a in [
+            "--script=/tmp/evil.sh",
+            // 分离写法也必须挡住，不能只匹配 `--flag=` 形式
+            "--script",
+            "--vpnc-script=/tmp/evil.sh",
+        ] {
+            let e = validate_args(&[a.to_string()], "vpn.corp.com")
+                .expect_err("必须拒绝能让 helper 执行任意程序的参数");
+            assert!(e.to_string().contains("禁止"), "错误信息应说明原因: {e}");
+        }
+    }
+
+    /// 与上一条配套：合法 argv 不能被误伤。
+    ///
+    /// 禁用清单是黑名单，加条目时有把正常用法一起拦掉的风险，
+    /// 所以要同时锁住「该拦的」和「不该拦的」。
+    #[test]
+    fn allows_normal_argv_after_adding_script_to_forbidden_list() {
+        let ok = [
+            "--protocol=anyconnect",
+            "--timestamp",
+            "-v",
+            "-u",
+            "alice",
+            "--passwd-on-stdin",
+            "--servercert=pin-sha256:AA",
+            "--reconnect-timeout=300",
+        ];
+        validate_args(&args(&ok), "vpn.corp.com")
+            .expect("正常 argv 不应被禁用清单误伤");
     }
 
     #[test]

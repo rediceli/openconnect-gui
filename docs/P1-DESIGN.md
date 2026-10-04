@@ -1067,6 +1067,139 @@ raw string 里 `r"\\.\pipe\\"` 末尾多了一个反斜杠。
   拼路径会把编译机绝对路径烧进二进制，给用户显示一条不存在的命令。
 - `--all` 未考虑 OD 里的域用户
 
+#### 6.3.14 「授权一次」能做到什么程度（研究结论）
+
+结论先行：**当前架构已经做到了「授权一次」，且这是 macOS 上的最优解。**
+一次 `sudo install-macos-daemon.sh` 之后，daemon 由 launchd 在开机时
+以 root 拉起（`RunAtLoad` + `KeepAlive`），此后所有连接都不再需要 sudo。
+
+##### 为什么「之后不再需要 sudo」是必然的
+
+daemon 以 root 常驻，GUI 以普通用户连接它的 0600 socket。**特权操作发生在
+socket 另一侧，与发起连接的用户身份无关。** 这是架构层面的性质，不是配置。
+
+##### 能不能连那唯一一次 sudo 也消掉？不能，除非放弃全隧道
+
+**utun 分配需要 root —— 这在本机实测过。**
+
+openconnect 在 macOS 上默认走 utun（`tun.c` 用
+`socket(PF_SYSTEM, SOCK_DGRAM, SYSPROTO_CONTROL)` + `UTUN_CONTROL_NAME`），
+`/dev/tun` 只是显式指定 `ifname=tun*` 时的回退。实测（macOS 14.8.9，
+uid 501）：
+
+| 步骤 | 结果 |
+|---|---|
+| `socket(PF_SYSTEM, SOCK_DGRAM, SYSPROTO_CONTROL)` | 无需特权即成功 |
+| `ioctl(CTLIOCGINFO)` | 成功，返回 `com.apple.net.utun_control` |
+| `connect()` 到 utun control | **EPERM** |
+
+补充实测：ad-hoc 签名**不能**绕过；伪造
+`com.apple.private.network.client` 权限会被 **SIGKILL**（无效权限是致命的）。
+
+所以全隧道 VPN 在 macOS 上无法免特权。
+
+##### 免签名的替代 API 逐条排除
+
+| 方案 | 结论 |
+|---|---|
+| `SMAppService` | 要求「helper 位于 app bundle 内」+ 代码签名。不适合裸的未签名 CLI |
+| `SMJobBless` | macOS 13 起废弃，且签名要求最严 |
+| `AuthorizationExecuteWithPrivileges` | **macOS 10.7 起废弃**。公开的 `system.privilege.*` 右只有 `system.privilege.admin` 一个 |
+| `AuthorizationCreate` 自定义右 | 需要写 policy DB，权限更高而非更低 |
+| App Sandbox + 授权 | Apple 明确不支持：「the authorization services API is not supported within an app sandbox」 |
+| `NEVPNManager`（Personal VPN） | **只支持 IPsec/IKEv2**，与 AnyConnect SSL/DTLS 协议不兼容 |
+| `NEPacketTunnelProvider` | 技术上可行，但要用 Swift 重写 openconnect 协议内核，且需要付费开发者账号 + Apple 授予的能力 |
+
+⚠️ **不要让 root daemon 弹授权框。** Apple 的 Root and Login Sessions
+文档指出 root 会话「precludes the use of many higher-level system
+frameworks that require the presence of the window server」，而授权框由
+SecurityAgent 渲染、需要 GUI 会话。Apple 推荐的方向恰好相反：
+**由非特权的 GUI 发起提示，root 侧只干活。** 当前实现符合这一点。
+
+##### 一个真实可行的零特权档位：SOCKS 模式
+
+openconnect 的 `-S`/`--script-tun` 通过 `socketpair(AF_UNIX)` 把流量交给
+用户态程序（`tun.c:467-501`，完全不碰 utun）。openconnect 自己的
+`www/nonroot.xml` 称其为「an alternative option which doesn't require
+any root access **at all**」，且平台无关。
+
+代价：没有 utun、没有系统路由、没有 DNS 接管 —— 只是「应用走一个 SOCKS 端口」。
+与菜单栏 VPN 图标 + 全局流量接管不是一回事。
+
+⚠️ **注意这里有个张力**：`--script-tun` 正在我们的禁用清单里，因为
+它 + `--script` 组合能让 helper 执行任意程序。若要提供 SOCKS 档位，
+必须由 GUI 传入**自己可信的**脚本路径，绝不能让客户端指定。
+
+##### 顺带修正：隧道测试脚本里的 `/dev/tun`
+
+`Scripts/macos-tunnel-test.sh` 原本会 `mknod /dev/tun c 10 200`，
+注释还写着「macOS 的 tun 是 char 10 200」—— **这是错的**。
+openconnect 默认走 utun，实测带 /dev/tun 的那次运行建的是 `utun6`，
+那个节点从未被使用。
+
+已移除该步骤。但脚本**仍然需要 sudo** —— 理由不是 tun 设备节点，
+而是 utun 分配本身要 root（上表 EPERM 实测）。
+
+##### 复核时发现并修掉一个真实的 root 提权漏洞
+
+研究建议 #3（命令面最小化）促使我去查 `Request::Start` 的 `args` 到底能
+带什么过去，结果发现 **`--script` 与 `--vpnc-script` 不在禁用清单里**：
+
+```
+--script=/tmp/evil.sh        → ✗ 通过校验 —— openconnect 会以 root 执行它
+--script 分离写法             → ✗ 通过校验
+--vpnc-script=/tmp/evil.sh   → ✗ 通过校验
+--script-tun(已知禁用)        → ✓ 被拦
+```
+
+openconnect 会**以当前进程权限**执行 `--script` 指定的 vpnc-script 去配路由。
+在 helper 里那是 root —— 于是任何能连上那个 0600 socket 的同用户进程，
+只要发一条 `{"op":"Start","args":["--script=/tmp/x.sh"],...}`
+就拿到了 root 代码执行。
+
+**为什么之前没炸**：helper 恰好没传 `--script`（用 openconnect 内置默认
+路径 `/usr/local/etc/vpnc/vpnc-script`）。那是「恰好安全」，不是「设计上
+安全」。而 GUI 的 Direct 通道确实会传 `--script`（`channel.rs`），说明
+这个参数在协议里合法存在，缺校验迟早被利用。
+
+修法：把 `--script` 与 `--vpnc-script` 加入 `FORBIDDEN`。
+helper 自己需要 vpnc-script 时只能用编译期确定的路径 —— 与既有原则
+一致（token secret 也是「helper 写 0600 文件，GUI 不指定路径」）。
+
+顺带明确了禁用清单的语义：匹配按 `=` 截断后比对**参数名**，所以
+`--script-tun=false` 也会被拒。这是有意的 —— 我们要的是「这个开关
+完全不出现」，而不是「它被设为某个值」。布尔否定形式
+`--no-script-tun` 不在清单里，但它只是关闭 script-tun，无害。
+
+新增两条测试锁住：`rejects_scripts_that_run_as_root`（该拦的）与
+`allows_normal_argv_after_adding_script_to_forbidden_list`（不该误伤的）。
+
+⚠️ 写第二条测试时我先假设 `--script-tun=false` 应被放行，测试因此失败。
+失败是对的：既然整个开关禁用，拒绝对的形式才是正确行为。
+**黑名单必须有反向测试**，否则很容易为了「兼容性」把它改松。
+
+##### 研究给出的三条加固建议：现状均已满足
+
+1. **allowlist 应是 daemon 只读、root 拥有、不可写的文件**
+   → 我们的 uid 列表在 `/Library/LaunchDaemons/*.plist`，helper 无任何
+   写 plist / 调 `launchctl` 的代码。换用户必须重跑安装脚本（需 sudo），
+   这正是期望行为
+2. **绝不让 daemon 改写自己的策略**
+   → 已确认 helper 无此能力。若允许，「拿到用户代码执行」的 attacker
+   就能让 daemon 把 `ProgramArguments` 指向自己的载荷，得到 root 持久化
+   —— 且完全静默，无 TCC 提示、无系统设置痕迹
+3. **命令面最小化，只白名单操作**
+   → `Request` 是固定枚举，不接受路径；`validate_program` 限定可执行文件
+
+##### macOS 15 本地网络隐私：已豁免，但有前提
+
+TN3179 明确：macOS 自动允许本地网络访问 *any daemon started by launchd*
+与 *any program running as root*。
+
+⚠️ **前提是该 launchd job 没有 `UserName` 键。** 设了 `UserName` 会让它
+落入「混合执行上下文」，正是 Apple 论坛 763753 那个 prompt bug 的成因。
+当前 plist 无 `UserName` 键，符合要求。
+
 #### 6.3.14 未完成部分
 
 | 项 | 状态 | 阻塞原因 |
@@ -1081,6 +1214,8 @@ raw string 里 `r"\\.\pipe\\"` 末尾多了一个反斜杠。
 | 企业 CA 证书（`ca_file`）的 UI 入口 | ❌ 无入口 | 后端字段已就绪，但 UI 未暴露选择器；企业环境（内部 CA 签发）比自签更常见 |
 | GUI 端到端（macOS） | 🔶 隧道已验证；socket 通道待装机 | 需 `sudo Scripts/install-macos-daemon.sh`（免签名） |
 | LaunchDaemon 真机验证 | 🔶 代码+脚本齐备 | 本机 sudo 需密码；`--serve` 模式已验证数据通路 |
+| 免特权 SOCKS 档位 | ❌ 未实现 | 需自建可信转发脚本；与 `--script-tun` 禁用策略有张力，需专门设计 |
+| macOS 15 本地网络提示 | ✅ 已规避 | plist 无 `UserName` 键，root daemon 属豁免范围（TN3179）；建议在 15.1+ 上复测 |
 | helper 随 App 分发 | ❌ 未做 | 当前需从源码仓库跑安装脚本；应改为打包进 `Contents/Library/` + `postinstall` |
 
 ### 6.4 其他
