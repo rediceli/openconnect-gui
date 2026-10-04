@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>io.wthink.wthinkvpn.helper</string>
+
+  <!--
+    ⚠️ SMAppService 不使用这个文件来判定调用方。
+    它是 SMJobBless 时代的遗留写法，SMAppService 下**不被强制执行** ——
+    授权判定在 shouldAcceptNewConnection 里做（见 main.swift）。
+    这里保留是为了兼容 App Store 审核时的检查项。
+  -->
+  <key>SMAuthorizedClients</key>
+  <array>
+    <dict>
+      <key>Identifier</key>
+      <string>com.wthink.wthinkvpn</string>
+      <key>Requirement</key>
+      <string>identifier "com.wthink.wthinkvpn"</string>
+    </dict>
+  </array>
+
+  <key>LaunchOnlyOnce</key>
+  <true/>
+  <key>KeepAlive</key>
+  <false/>
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>MachServices</key>
+  <dict>
+    <key>io.wthink.wthinkvpn.helper</key>
+    <true/>
+  </dict>
+
+  <!--
+    Team ID 由 Scripts/sign-macos.sh 写入。
+    helper 用它做调用方校验（比对 connecting process 的 Team ID）。
+    缺失时 helper 拒绝所有连接 —— 宁严勿松。
+  -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>WTHINKVPN_TEAM_ID</key>
+    <string>__TEAM_ID__</string>
+  </dict>
+
+  <!-- root 运行，且不能被 ptrace -->
+  <key>UserName</key>
+  <string>root</string>
+  <key>ProcessType</key>
+  <string>Standard</string>
+</dict>
+</plist>

@@ -1,0 +1,455 @@
+//! P0/P1: openconnect 日志 → 结构化状态事件
+//!
+//! 输入: `openconnect -v --timestamp` 的 stdout+stderr 合并流
+//! 输出: `oc_event::Event`，供 UI 状态机消费
+//!
+//! 事件分类依据 openconnect 源码 (auth.c / main.c / tun.c) 中
+//! `vpn_progress()` 的固定文案。这是有意的脆弱设计 —— 见 DESIGN.md
+//! 「状态解析的脆弱性与兜底」一节。
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Level {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+    /// openconnect 在终端直接打印的交互提示（非 vpn_progress）
+    Prompt,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Kind {
+    /// 未识别的普通日志行
+    Log,
+    /// 尝试连接
+    Connecting,
+    /// TLS 握手完成
+    TlsEstablished,
+    /// 需要用户交互（表单提示 / 令牌 / 指纹确认）
+    Prompt,
+    /// 服务器证书校验结果
+    CertVerified,
+    /// 认证成功（拿到 cookie）
+    AuthOk,
+    /// 认证失败（密码错、账号锁、证书被拒）
+    AuthFailed,
+    /// 认证可重试
+    AuthRetry,
+    /// 认证已通过，开始建立 CSTP 隧道通道
+    TunnelStarting,
+    /// 会话建立，openconnect 打印 Configured as ...（拿到分配的 IP）
+    SessionEstablished,
+    /// 隧道数据通道 up
+    TunnelUp,
+    /// 隧道断开
+    TunnelDown,
+    /// 周期性统计行（RX/TX/rekey）—— 隧道健康的持续信号
+    Stats,
+    /// 服务端要求断线重连
+    Reconnect,
+    /// 收到终止信号（我们主动断开）
+    Signalled,
+    /// 致命错误，进程即将退出
+    Fatal,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Event {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ts: Option<String>,
+    pub level: Level,
+    pub kind: Kind,
+    /// 事件相关字段，如 ciphersuite / host / address
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    /// 原始行，日志页原样展示
+    pub raw: String,
+}
+
+/// 拆分 `--timestamp` 前缀 `[YYYY-MM-DD HH:MM:SS] `。
+/// openconnect 用 `strftime("%Y-%m-%d %H:%M:%S")` 生成，形状固定，
+/// 因此手写校验比引入正则更轻。
+fn strip_timestamp(line: &str) -> (Option<&str>, &str) {
+    const TS_LEN: usize = 19; // YYYY-MM-DD HH:MM:SS
+    let b = line.as_bytes();
+    // '[' + 19 + ']' + ' '
+    if b.len() > TS_LEN + 3
+        && b[0] == b'['
+        && b[TS_LEN + 1] == b']'
+        && b[TS_LEN + 2] == b' '
+    {
+        let digits_ok = b[1..=TS_LEN]
+            .iter()
+            .enumerate()
+            .all(|(i, c)| match i {
+                4 | 7 | 10 | 13 | 16 => *c == b'-' || *c == b':' || *c == b' ',
+                _ => c.is_ascii_digit(),
+            });
+        if digits_ok {
+            return (
+                Some(&line[1..=TS_LEN]),
+                line[TS_LEN + 3..].trim_start(),
+            );
+        }
+    }
+    (None, line)
+}
+
+/// 事件判定表。顺序即优先级，越具体越靠前。
+///
+/// ⚠️ 每条 pattern 都能在 openconnect 源码中 grep 到（文件已注明）。
+///    这不是可选的严谨性 —— openconnect 的日志文案就是它的 UI 契约。
+///
+///    P0 实测教训：常见于第三方文档/博客的字符串
+///    「Established session to」「Assigned IP address」「Data connection」
+///    「DPD data channel」「Reconnect interval」「Please try again」
+///    在 openconnect 源码中**根本不存在**。基于网络资料的规则表 100% 是错的，
+///    必须以 `grep -rn "<pattern>" *.c` 逐条核对。
+type Rule = (&'static str, Level, Kind, Option<&'static str>);
+
+const RULES: &[Rule] = &[
+    // ---- 连接建立 ----
+    ("Attempting to connect to server", Level::Debug, Kind::Connecting, None), // ssl.c
+    ("Failed to connect to", Level::Error, Kind::Fatal, None),                  // ssl.c
+    ("Connected to HTTPS on", Level::Info, Kind::TlsEstablished, Some("ciphersuite")), // gnutls.c/openssl.c
+    ("Failed to open HTTPS connection", Level::Error, Kind::Fatal, None),       // auth.c
+
+    // ---- 交互提示 ----
+    ("GROUP:", Level::Prompt, Kind::Prompt, None),                              // main.c 表单下拉
+    ("Please enter your username and password", Level::Prompt, Kind::Prompt, None),
+    ("Password:", Level::Prompt, Kind::Prompt, None),                        // auth.c/fortinet.c/pulse.c
+    ("PIN:", Level::Prompt, Kind::Prompt, None),                             // stoken.c 软令牌 PIN
+    ("Enter software token PIN", Level::Prompt, Kind::Prompt, None),         // stoken.c
+    ("Token code request", Level::Prompt, Kind::Prompt, None),               // pulse.c
+    ("Invalid PIN format", Level::Warn, Kind::Prompt, None),                 // stoken.c
+    ("Server certificate", Level::Prompt, Kind::Prompt, None),                  // main.c 指纹确认
+    ("Certificate Validation Failure", Level::Error, Kind::AuthFailed, None),   // auth.c
+    ("Client certificate missing or incorrect", Level::Error, Kind::AuthFailed, None), // auth.c 改写后文案
+    ("consecutive empty forms", Level::Error, Kind::AuthFailed, None),         // main.c
+    ("Auth choice \"", Level::Error, Kind::AuthFailed, None),                   // main.c
+
+    // ---- 认证结果 ----
+    ("Failed to complete authentication", Level::Error, Kind::AuthFailed, None), // main.c
+
+    // ---- 隧道 ----
+    // main.c print_connection_info():
+    //   "Configured as %s, with SSL + ... %s and UDP + ... %s"
+    ("Configured as", Level::Info, Kind::SessionEstablished, Some("address")),
+    ("Got CONNECT response", Level::Info, Kind::TunnelStarting, None),         // cstp.c 认证已过，开始建隧道
+    ("CSTP connected", Level::Info, Kind::TunnelUp, None),                     // cstp.c
+    ("Set up tun script failed", Level::Error, Kind::Fatal, None),             // mainloop.c
+    ("Set up tun device failed", Level::Error, Kind::Fatal, None),             // mainloop.c
+    ("No --script argument provided", Level::Warn, Kind::Log, None),           // main.c
+
+    // ---- 统计（周期性，说明隧道已 up）----
+    ("RX:", Level::Info, Kind::Stats, None),                                    // main.c print_connection_stats
+    ("Session authentication will expire at", Level::Info, Kind::Stats, None),
+    ("Next SSL rekey in", Level::Info, Kind::Stats, None),
+    ("Next UDP rekey in", Level::Info, Kind::Stats, None),
+    ("SSL ciphersuite:", Level::Info, Kind::Stats, None),
+
+    // ---- 重连 ----
+    ("User requested reconnect", Level::Info, Kind::Reconnect, None),           // main.c
+    ("Cookie was rejected by server", Level::Error, Kind::Fatal, None),         // main.c
+    ("Session terminated by server", Level::Error, Kind::Fatal, None),          // main.c
+
+    // ---- 终止 ----
+    ("User cancelled", Level::Info, Kind::Signalled, None),                     // main.c
+    ("User detached from session", Level::Info, Kind::Signalled, None),         // main.c
+    ("Unrecoverable I/O error", Level::Error, Kind::Fatal, None),               // main.c
+    ("Got inappropriate HTTP CONNECT response", Level::Error, Kind::Fatal, None),
+    ("Failed to establish VPN connection", Level::Error, Kind::Fatal, None),
+    ("Unknown error; exiting", Level::Error, Kind::Fatal, None),                // main.c
+    ("; exiting", Level::Error, Kind::Fatal, None),                             // main.c 兜底 "%s; exiting"
+];
+
+pub fn parse_line(raw: &str) -> Option<Event> {
+    let line = raw.trim_end_matches(['\r', '\n']);
+    if line.trim().is_empty() {
+        return None;
+    }
+    let (ts, body) = strip_timestamp(line);
+
+    for (pat, level, kind, field) in RULES {
+        if !body.contains(pat) {
+            continue;
+        }
+        let detail = field.and_then(|f| extract_field(body, f));
+        return Some(Event {
+            ts: ts.map(str::to_owned),
+            level: *level,
+            kind: *kind,
+            detail,
+            raw: line.to_owned(),
+        });
+    }
+
+    Some(Event {
+        ts: ts.map(str::to_owned),
+        level: Level::Info,
+        kind: Kind::Log,
+        detail: None,
+        raw: line.to_owned(),
+    })
+}
+
+/// `Connected to HTTPS on HOST with ciphersuite (TLS1.3)-(...)`
+///   field="ciphersuite" -> "(TLS1.3)-(...)"
+/// `Data connection: PROTO, local X, remote Y`
+///   field="proto" -> "PROTO"
+fn extract_field(body: &str, field: &str) -> Option<String> {
+    match field {
+        "ciphersuite" => body.rsplit_once("ciphersuite ").map(|(_, v)| v.trim().to_owned()),
+        "host" => body
+            .rsplit_once(' ')
+            .map(|(_, v)| v.trim().to_owned())
+            .or_else(|| body.strip_prefix("Established session to ").map(str::to_owned)),
+        // "Configured as 10.0.0.2/255.255.255.0, with SSL ..." 或 "Assigned IP address: 1.2.3.4"
+        "address" => body
+            .strip_prefix("Configured as ")
+            .map(|v| v.split(", with ").next().unwrap_or(v).trim().to_owned())
+            .or_else(|| body.split_once(": ").map(|(_, v)| v.trim().to_owned())),
+        "proto" => body
+            .strip_prefix("Data connection: ")
+            .and_then(|v| v.split(',').next())
+            .map(|v| v.trim().to_owned()),
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 状态机
+// ---------------------------------------------------------------------------
+
+/// 对 UI 暴露的连接状态。任何状态变化都应 emit 一个事件给前端。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum State {
+    /// 进程未启动 / 已退出
+    #[default]
+    Idle,
+    /// TCP + TLS 握手中
+    Connecting,
+    /// 等待用户输入（表单、令牌、指纹确认）
+    AwaitingUser,
+    /// 已提交凭据，等待服务器判定
+    Authenticating,
+    /// 认证已通过，正在建立 CSTP 隧道通道
+    Configuring,
+    /// 隧道数据通道已建立，TUN 已 up
+    Connected,
+    /// openconnect 正在自动重连
+    Reconnecting,
+    /// 因错误终止
+    Failed,
+}
+
+/// 状态机。把逐行事件聚合成状态，供托盘图标与连接页渲染。
+///
+/// 设计要点：认证成功的判定**不能**依赖日志文案。openconnect 在
+/// `<auth id="success">` 路径下不打任何日志（P0 已实测）。因此这里采用
+/// 「请求计数 + Set-Cookie」推断：表单提示之后出现了新的响应头块，
+/// 且不再回到表单，即视为认证通过。
+#[derive(Debug, Default)]
+pub struct Tracker {
+    state: State,
+    /// 已提交过表单（出现过表单提示或 auth-reply）
+    submitted: bool,
+    /// 见到过 Set-Cookie 响应头
+    saw_cookie: bool,
+    /// 认证失败后还剩几次重试机会（openconnect 自身会重试）
+    pub auth_retries: u32,
+    /// 是否已打印过 "Attempting to connect to server"（首个 POST 在此之前）
+    saw_attempt: bool,
+    /// 提交凭据后是否已收到 cookie（仅用于诊断/UI 提示，不作判据）
+    pub auth_cookie_seen: bool,
+}
+
+impl Tracker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn state(&self) -> State {
+        self.state
+    }
+
+    fn to(&mut self, next: State) -> Option<(State, State)> {
+        if self.state == next {
+            return None;
+        }
+        let prev = std::mem::replace(&mut self.state, next);
+        Some((prev, next))
+    }
+
+    /// 喂入一行原始日志，返回状态变化（`(from, to)`）。
+    pub fn feed_line(&mut self, raw: &str) -> Option<(State, State)> {
+        let ev = parse_line(raw)?;
+        self.feed(ev)
+    }
+
+    /// 喂入一个已解析事件。
+    pub fn feed(&mut self, ev: Event) -> Option<(State, State)> {
+        // openconnect 每个 HTTP 请求前都会打印 `POST <url>`。
+        // 表单提示之后的第一条 POST 即「凭据已提交」，这是一个
+        // 比任何日志文案都可靠的客观信号。
+        let is_request = ev.raw.contains("] POST ") || ev.raw.starts_with("POST ");
+
+        // Set-Cookie 是认证响应的客观信号，先于状态判定处理
+        if ev.raw.starts_with("Set-Cookie:") || ev.raw.contains("] Set-Cookie:") {
+            self.saw_cookie = true;
+        }
+
+        match ev.kind {
+            Kind::Connecting => {
+                self.saw_attempt = true;
+                return self.to(State::Connecting);
+            }
+            Kind::Prompt => {
+                // 隧道已建立后出现的提示（如重连提示）不应回退到 AwaitingUser
+                if self.state == State::Connected || self.state == State::Reconnecting {
+                    return None;
+                }
+                // 新一轮表单 ⇒ 上一轮的 submitted 作废
+                self.submitted = false;
+                self.saw_cookie = false;
+                return self.to(State::AwaitingUser);
+            }
+            Kind::AuthRetry => {
+                self.auth_retries += 1;
+                self.submitted = true;
+                return self.to(State::Authenticating);
+            }
+            Kind::AuthFailed => return self.to(State::Failed),
+            Kind::CertVerified => None,
+            Kind::AuthOk => {
+                self.submitted = true;
+                return self.to(State::Configuring);
+            }
+            Kind::TunnelStarting => {
+                self.submitted = true;
+                return self.to(State::Configuring);
+            }
+            Kind::SessionEstablished | Kind::TunnelUp => {
+                self.submitted = true;
+                return self.to(State::Connected);
+            }
+            Kind::Reconnect => return self.to(State::Reconnecting),
+            Kind::TunnelDown => return self.to(State::Idle),
+            Kind::Signalled => return self.to(State::Idle),
+            // 统计行只在隧道 up 后出现，可用于兜底确认 Connected
+            Kind::Stats => {
+                if self.state == State::Configuring {
+                    return self.to(State::Connected);
+                }
+                None
+            }
+            Kind::Fatal => return self.to(State::Failed),
+            Kind::TlsEstablished | Kind::Log => {
+                // 「Attempting to connect」之后的第一条 POST 才是凭据提交；
+                // 在此之前的 POST 是 XML 初始请求，不代表用户已提交凭据。
+                if is_request && self.saw_attempt && !self.submitted {
+                    self.submitted = true;
+                    return self.to(State::Authenticating);
+                }
+                // 「凭据已提交 + 收到 cookie」只说明认证在推进，
+                // 不能作为认证成功的判据 —— 网关在认证失败时同样下发
+                // Set-Cookie（P0 实测）。真正的判据是后续的 CONNECT。
+                if self.submitted && self.saw_cookie {
+                    self.auth_cookie_seen = true;
+                }
+                None
+            }
+        }
+    }
+
+    /// 子进程退出时的最终裁决。
+    pub fn on_exit(&mut self, code: Option<i32>) -> Option<(State, State)> {
+        // 退出前已确认 Connected 说明是被 SIGINT 打断的正常断开
+        if self.state == State::Connected || self.state == State::Idle {
+            return self.to(State::Idle);
+        }
+        match code {
+            Some(0) => self.to(State::Idle),
+            _ => self.to(State::Failed),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn one(line: &str) -> Event {
+        parse_line(line).expect("not empty")
+    }
+
+    #[test]
+    fn strips_timestamp() {
+        let e = one("[2026-10-03 02:09:40] XML POST enabled");
+        assert_eq!(e.ts.as_deref(), Some("2026-10-03 02:09:40"));
+        assert_eq!(e.kind, Kind::Log);
+    }
+
+    #[test]
+    fn line_without_timestamp_is_prompt_or_log() {
+        let e = one("Please enter your username and password.");
+        assert_eq!(e.ts, None);
+        assert_eq!(e.kind, Kind::Prompt);
+        assert_eq!(e.level, Level::Prompt);
+    }
+
+    #[test]
+    fn tls_ciphersuite_extracted() {
+        let e = one("[2026-10-03 02:09:40] Connected to HTTPS on vpn.corp with ciphersuite (TLS1.3)-(ECDHE-X25519)-(AES-256-GCM)");
+        assert_eq!(e.kind, Kind::TlsEstablished);
+        assert_eq!(e.detail.as_deref(), Some("(TLS1.3)-(ECDHE-X25519)-(AES-256-GCM)"));
+    }
+
+    #[test]
+    fn auth_failure_is_fatal_not_prompt() {
+        let e = one("Failed to complete authentication");
+        assert_eq!(e.kind, Kind::AuthFailed);
+        assert_eq!(e.level, Level::Error);
+    }
+
+    #[test]
+    fn group_prompt_recognised() {
+        let e = one("GROUP: [|Engineering|Operations]:");
+        assert_eq!(e.kind, Kind::Prompt);
+        assert_eq!(e.level, Level::Prompt);
+    }
+
+    #[test]
+    fn configured_as_extracts_assigned_address() {
+        // main.c: "Configured as %s, with SSL + ... and UDP + ... %s"
+        let e = one("[2026-10-03 02:09:40] Configured as 10.99.99.2/255.255.255.0, with SSL + deflate-ipv6 AES-256-GCM and UDP + AES-256-GCM ikev2");
+        assert_eq!(e.kind, Kind::SessionEstablished);
+        assert_eq!(e.detail.as_deref(), Some("10.99.99.2/255.255.255.0"));
+    }
+
+    #[test]
+    fn stats_line_recognised() {
+        let e = one("[2026-10-03 02:10:00] RX: 1024 packets (65536 B); TX: 2048 packets (131072 B)");
+        assert_eq!(e.kind, Kind::Stats);
+    }
+
+    #[test]
+    fn quit_reason_is_fatal() {
+        let e = one("Cookie was rejected by server; exiting.");
+        assert_eq!(e.kind, Kind::Fatal);
+        let e2 = one("User cancelled (SIGINT/SIGTERM); exiting.");
+        assert_eq!(e2.kind, Kind::Signalled);
+    }
+
+    #[test]
+    fn blank_lines_skipped() {
+        assert!(parse_line("   \n").is_none());
+        assert!(parse_line("\n").is_none());
+    }
+}

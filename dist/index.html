@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>WthinkVPN</title>
+<style>
+  :root{
+    --bg:#f5f6f8; --card:#fff; --line:#e3e5e9; --text:#1c1e21; --muted:#6b7280;
+    --accent:#0a64d4; --ok:#0f9d58; --warn:#c2650b; --err:#c5221f;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --bg:#18191a; --card:#242627; --line:#3a3c3e; --text:#e4e6e8; --muted:#9aa0a6; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,sans-serif;
+       background:var(--bg);color:var(--text)}
+  .wrap{max-width:430px;margin:0 auto;padding:20px}
+  h1{font-size:17px;margin:0 0 16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:12px}
+  .row{display:flex;align-items:center;justify-content:space-between;gap:10px}
+  label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px}
+  input,select{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;
+               background:var(--bg);color:var(--text);font-size:14px}
+  input:focus,select:focus{outline:2px solid var(--accent);outline-offset:-1px}
+  button{width:100%;padding:11px;border:0;border-radius:8px;background:var(--accent);color:#fff;
+         font-size:14px;font-weight:600;cursor:pointer;margin-top:14px}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  button.ghost{background:transparent;color:var(--muted);border:1px solid var(--line)}
+  .pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600}
+  .s-idle{background:var(--line);color:var(--muted)}
+  .s-connecting,.s-authenticating,.s-configuring,.s-reconnecting,.s-awaiting_user{
+      background:#fef7e0;color:var(--warn)}
+  .s-connected{background:#e6f4ea;color:var(--ok)}
+  .s-failed{background:#fce8e6;color:var(--err)}
+  .msg{font-size:13px;color:var(--muted);margin-top:12px;min-height:20px}
+
+  /* ---- 证书信任弹窗（TOFU）---- */
+  #certmask{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;
+            align-items:center;justify-content:center;z-index:50;padding:20px}
+  #certmask.on{display:flex}
+  #certbox{background:var(--panel,#fff);border:1px solid var(--line);border-radius:12px;
+           max-width:560px;width:100%;max-height:90vh;overflow:auto;padding:20px}
+  #certbox h3{margin:0 0 4px;font-size:16px}
+  #certbox .sub{font-size:12px;color:var(--muted);margin-bottom:14px}
+  #certbox table{width:100%;border-collapse:collapse;font-size:12px;margin-bottom:14px}
+  #certbox td{padding:5px 0;vertical-align:top;border-bottom:1px solid var(--line)}
+  #certbox td:first-child{width:96px;color:var(--muted);white-space:nowrap}
+  #certbox td.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+                  word-break:break-all;font-size:11px}
+  #certbox .warn{background:rgba(200,120,0,.12);border:1px solid rgba(200,120,0,.4);
+                color:#a35c00;border-radius:8px;padding:10px;font-size:12px;margin-bottom:14px}
+  #certbox .warn.bad{background:rgba(200,0,0,.10);border-color:rgba(200,0,0,.4);color:#a00}
+  #certbox .acts{display:flex;gap:8px;justify-content:flex-end}
+  #certbox button{margin:0}
+  .msg.err{color:var(--err)}
+  .log{height:150px;overflow:auto;background:var(--bg);border:1px solid var(--line);
+       border-radius:8px;padding:8px;font:11px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;
+       white-space:pre-wrap;word-break:break-all}
+  .tabs{display:flex;gap:6px;margin-bottom:12px}
+  .tabs button{width:auto;flex:1;margin:0;padding:7px;background:transparent;color:var(--muted);
+               border:1px solid var(--line);font-weight:500}
+  .tabs button.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .hide{display:none}
+  .profiles{display:flex;flex-direction:column;gap:8px}
+  .prof{display:flex;justify-content:space-between;align-items:center;padding:10px;
+        border:1px solid var(--line);border-radius:8px;cursor:pointer}
+  .prof.sel{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent)}
+  .prof small{display:block;color:var(--muted)}
+  .x{border:0;background:transparent;color:var(--muted);cursor:pointer;font-size:16px;padding:0 4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>WthinkVPN</h1>
+
+  <div class="tabs">
+    <button id="tab-conn" class="on" onclick="tab('conn')">连接</button>
+    <button id="tab-prof" onclick="tab('prof')">账号</button>
+    <button id="tab-log"  onclick="tab('log')">日志</button>
+  </div>
+
+  <!-- 连接 -->
+  <div id="v-conn">
+    <div class="card">
+      <div class="row">
+        <select id="profile" style="flex:1" onchange="render()"></select>
+      </div>
+      <label>网关地址</label>
+      <input id="server" placeholder="vpn.corp.com" />
+      <label>用户名</label>
+      <input id="username" placeholder="alice@corp" autocomplete="off" />
+      <label>密码</label>
+      <input id="password" type="password" placeholder="留空则用钥匙串中已保存的" autocomplete="off" />
+      <div class="row" style="margin-top:10px">
+        <label style="margin:0"><input id="remember" type="checkbox" style="width:auto" /> 记住密码（存系统钥匙串）</label>
+      </div>
+      <button id="go">连接</button>
+      <div class="msg" id="msg"></div>
+    </div>
+    <div class="card">
+      <div class="row"><span>状态</span><span class="pill s-idle" id="state">idle</span></div>
+    </div>
+
+    <!-- 特权助手 -->
+    <div class="card" id="helper-card">
+      <div class="row">
+        <div>
+          <b>特权助手</b>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px" id="helper-msg">检测中…</div>
+        </div>
+        <button class="ghost" id="helper-btn" style="width:auto;margin:0;padding:7px 12px" onclick="startHelper()">提权启动</button>
+      </div>
+      <code id="helper-cmd" style="display:none;margin-top:10px;font-size:11px;
+            background:var(--bg);border:1px solid var(--line);border-radius:6px;
+            padding:8px;word-break:break-all;color:var(--muted)"></code>
+    </div>
+  </div>
+
+  <!-- 账号管理 -->
+  <div id="v-prof" class="hide">
+    <div class="card">
+      <div class="row"><b>已保存的连接</b><button class="ghost" style="width:auto;margin:0;padding:6px 10px" onclick="saveProfile()">保存当前</button></div>
+      <div class="profiles" id="plist" style="margin-top:12px"></div>
+    </div>
+  </div>
+
+  <!-- 日志 -->
+  <div id="v-log" class="hide">
+    <div class="card">
+      <div class="row" style="margin-bottom:8px">
+        <b>实时日志</b>
+        <button class="ghost" style="width:auto;margin:0;padding:6px 10px" onclick="document.getElementById('log').textContent=''">清空</button>
+      </div>
+      <div class="log" id="log"></div>
+    </div>
+  </div>
+</div>
+
+<!-- 首次连接服务器时的证书确认（TOFU） -->
+<div id="certmask">
+  <div id="certbox">
+    <h3>确认服务器证书</h3>
+    <div class="sub">这是首次连接。确认后将记住该证书指纹，之后若指纹变化会拒绝连接。</div>
+    <div id="certwarn"></div>
+    <table>
+      <tr><td>服务器</td><td id="c-host"></td></tr>
+      <tr><td>证书主体</td><td id="c-subject"></td></tr>
+      <tr><td>签发者</td><td id="c-issuer"></td></tr>
+      <tr><td>有效期</td><td id="c-valid"></td></tr>
+      <tr><td>证书指纹</td><td class="mono" id="c-fp"></td></tr>
+      <tr><td>将记录的 pin</td><td class="mono" id="c-pin"></td></tr>
+    </table>
+    <div class="acts">
+      <button class="ghost" id="cert-no">拒绝</button>
+      <button id="cert-yes">信任并继续</button>
+    </div>
+  </div>
+</div>
+
+<script type="module">
+const invoke = (await import("@tauri-apps/api/core")).invoke;
+const listen  = (await import("@tauri-apps/api/event")).listen;
+
+const $ = (id) => document.getElementById(id);
+let profiles = [];
+let current = null;
+
+const STATE_LABEL = {
+  idle:"未连接", connecting:"连接中", awaiting_user:"等待输入",
+  authenticating:"验证身份", configuring:"建立隧道",
+  connected:"已连接", reconnecting:"重连中", failed:"失败",
+};
+
+function tab(which) {
+  for (const k of ["conn","prof","log"]) {
+    $("v-"+k).classList.toggle("hide", k !== which);
+    $("tab-"+k).classList.toggle("on", k === which);
+  }
+}
+
+function msg(text, isErr) {
+  const el = $("msg");
+  el.textContent = text;
+  el.className = "msg" + (isErr ? " err" : "");
+}
+
+function setState(s) {
+  const pill = $("state");
+  pill.textContent = STATE_LABEL[s] ?? s;
+  pill.className = "pill s-" + s;
+  $("go").textContent = (s === "connected") ? "断开" : "连接";
+  $("go").disabled = ["connecting","authenticating","configuring","reconnecting"].includes(s);
+}
+
+async function loadProfiles() {
+  profiles = await invoke("list_profiles");
+  const sel = $("profile");
+  sel.innerHTML = "";
+  if (!profiles.length) {
+    sel.innerHTML = '<option value="">（新建连接）</option>';
+  } else {
+    for (const p of profiles) {
+      const o = document.createElement("option");
+      o.value = p.id;
+      o.textContent = p.name + " — " + p.server;
+      sel.appendChild(o);
+    }
+    if (!current) current = profiles[0].id;
+  }
+  sel.value = current ?? "";
+  renderList();
+}
+
+function render() {
+  current = $("profile").value || null;
+  const p = profiles.find(x => x.id === current);
+  $("server").value   = p?.server ?? "";
+  $("username").value = p?.username ?? "";
+  $("remember").checked = !!p?.remember_password;
+  $("password").value = "";
+  if (p) {
+    invoke("has_saved_password", { profile: p }).then(s => {
+      $("password").placeholder = s ? "已保存在钥匙串" : "留空则每次询问";
+    });
+  }
+  renderList();
+}
+
+function renderList() {
+  const box = $("plist");
+  box.innerHTML = "";
+  for (const p of profiles) {
+    const d = document.createElement("div");
+    d.className = "prof" + (p.id === current ? " sel" : "");
+    d.onclick = () => { current = p.id; $("profile").value = p.id; render(); };
+    d.innerHTML = `<div><b>${esc(p.name)}</b><small>${esc(p.server)}</small></div>`;
+    const x = document.createElement("button");
+    x.className = "x"; x.textContent = "✕";
+    x.onclick = async (e) => { e.stopPropagation();
+      await invoke("delete_profile", { id: p.id }); await loadProfiles(); };
+    d.appendChild(x);
+    box.appendChild(d);
+  }
+}
+
+const esc = (s) => String(s).replace(/[&<>"]/g, c =>
+  ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;" }[c]));
+
+async function saveProfile() {
+  const server = $("server").value.trim();
+  if (!server) return msg("请填写网关地址", true);
+  const p = {
+    id: current ?? (crypto.randomUUID()),
+    name: server.split("/")[0],
+    server,
+    protocol: "anyconnect",
+    username: $("username").value.trim() || null,
+    remember_password: $("remember").checked,
+  };
+  const saved = await invoke("save_profile", { profile: p });
+  current = saved.id;
+  if ($("remember").checked && $("password").value) {
+    await invoke("store_password", { profile: saved, password: $("password").value });
+  }
+  await loadProfiles();
+  msg("已保存");
+}
+
+// ---- 服务器证书首次信任（TOFU）----
+//
+// 未设pin 时 openconnect 会向已被 --passwd-on-stdin 占用的 stdin 索要
+// 交互确认，用户永远看不到这个问题。因此我们先自己探测证书、让用户确认，
+// 再把 pin 写进 profile。
+function certDialog(info) {
+  return new Promise((resolve) => {
+    $("c-host").textContent = info.host + ":" + info.port;
+    $("c-subject").textContent = info.subject || "(空)";
+    $("c-issuer").textContent = info.issuer || "(空)";
+    $("c-valid").textContent = info.notBefore + " → " + info.notAfter;
+    $("c-fp").textContent = info.certSha256;
+    $("c-pin").textContent = info.pinSha256;
+
+    // 自签 + CN 是占位符是最常见的自签特征，风险最高，警告要最强。
+    const warns = [];
+    if (info.selfSigned) {
+      warns.push("证书是<b>自签</b>的（主体与签发者相同），无法通过 CA 校验链验证。");
+    }
+    if (/yourhost|example\.com|localhost/i.test(info.subject)) {
+      warns.push("证书主体是 <b>" + info.subject + "</b> —— 这是 ocserv/OpenWRT 的默认占位符，" +
+                 "并非真实主机名。请确认你知道这个网关。");
+    }
+    if (info.expired) {
+      warns.push("<b>证书已过期</b>。");
+    }
+    $("certwarn").innerHTML = warns.length
+      ? '<div class="warn' + (info.expired ? " bad" : "") + '">' + warns.join("<br>") + "</div>"
+      : "";
+
+    const done = (ok) => {
+      $("certmask").classList.remove("on");
+      $("cert-yes").onclick = null;
+      $("cert-no").onclick = null;
+      resolve(ok);
+    };
+    $("cert-yes").onclick = () => done(true);
+    $("cert-no").onclick = () => done(false);
+    $("certmask").classList.add("on");
+  });
+}
+
+$("go").onclick = async () => {
+  const btn = $("go");
+  try {
+    if (btn.textContent === "断开") {
+      await invoke("disconnect");
+      return;
+    }
+    const profile = {
+      id: current ?? crypto.randomUUID(),
+      name: $("server").value.split("/")[0] || "vpn",
+      server: $("server").value.trim(),
+      protocol: "anyconnect",
+      username: $("username").value.trim() || null,
+      remember_password: $("remember").checked,
+    };
+    if (btn.textContent === "连接") {
+      // 没有 pin 才需要确认；已有 pin 时 openconnect 会自己做精确匹配，
+      // 证书变了会直接失败，无需打扰用户。
+      if (!profile.advanced?.server_cert_pin) {
+        msg("正在读取服务器证书…");
+        let info;
+        try {
+          info = await invoke("probe_server_cert", { server: profile.server });
+        } catch (e) {
+          msg("无法读取服务器证书: " + e, true);
+          return;
+        }
+        const ok = await certDialog(info);
+        if (!ok) {
+          msg("已拒绝该证书，未发起连接", true);
+          return;
+        }
+        profile.advanced = { ...(profile.advanced || {}),
+                             server_cert_pin: info.pinSha256 };
+        // 持久化，下次不再询问
+        try {
+          await invoke("trust_server_cert",
+                       { profileId: profile.id, pin: info.pinSha256 });
+        } catch (e) {
+          msg("证书 pin 保存失败（本次仍可连接）: " + e, true);
+        }
+      }
+
+      await invoke("connect", {
+        profile,
+        password: $("password").value || null,
+        cookie: null,
+      });
+      $("password").value = "";
+      msg("正在连接…");
+    }
+  } catch (e) {
+    msg(String(e), true);
+  }
+};
+
+// ---- 特权助手 ----
+async function refreshHelper() {
+  try {
+    const h = await invoke("helper_status");
+    $("helper-msg").textContent = h.message;
+    if (h.privileged) {
+      $("helper-btn").style.display = "none";
+      $("helper-cmd").style.display = "none";
+    } else {
+      $("helper-btn").style.display = "";
+      $("helper-cmd").style.display = "";
+      $("helper-cmd").textContent = h.elevate_command ?? "";
+    }
+  } catch (e) {
+    $("helper-msg").textContent = "无法检测助手状态: " + e;
+  }
+}
+
+async function startHelper() {
+  const btn = $("helper-btn");
+  btn.disabled = true;
+  const isMac = navigator.userAgent.includes("Macintosh");
+  btn.textContent = isMac ? "申请中…" : "等待授权…";
+  $("helper-msg").textContent = isMac
+    ? "正在向系统申请注册特权助手…"
+    : "请在系统弹窗中输入管理员密码";
+  try {
+    const state = await invoke("helper_start_elevated");
+    const ok = await invoke("helper_wait_ready", { timeoutMs: 30000 });
+
+    if (ok) {
+      $("helper-msg").textContent = "特权助手已就绪";
+      btn.style.display = "none";
+      $("helper-cmd").style.display = "none";
+    } else if (isMac) {
+      // macOS 的 SMAppService 不会弹密码框 ——
+      // 必须在「系统设置 → 通用 → 登录项」手动批准。
+      $("helper-msg").textContent =
+        "请到「系统设置 → 通用 → 登录项」打开 WthinkVPN 的开关（系统状态：" + state + "）";
+      btn.textContent = "打开系统设置";
+      btn.onclick = () => invoke("open_system_settings");
+    } else {
+      $("helper-msg").textContent = "助手未能在 30 秒内就绪（可能取消了授权）";
+      btn.textContent = "提权启动";
+      btn.onclick = startHelper;
+    }
+  } catch (e) {
+    $("helper-msg").textContent = "启动失败: " + e;
+    btn.textContent = "提权启动";
+    btn.onclick = startHelper;
+  }
+  btn.disabled = false;
+}
+
+listen("vpn://state", e => setState(e.payload.state));
+listen("vpn://cause", e => {
+  const c = e.payload.cause ?? {};
+  // 权限问题要引导用户启动助手，而不是让用户反复重试
+  if (c.hint && c.kind === "privilege_required") {
+    msg(c.hint, true);
+    refreshHelper();
+    $("helper-card").scrollIntoView({ behavior: "smooth", block: "nearest" });
+    return;
+  }
+  // reason 可能为空（helper 通道下 Finished 事件不重复传 reason，
+  // 原因由 message_key 决定）—— 此时不要显示空白。
+  const text = c.reason && c.reason.length
+    ? c.reason
+    : "已结束：" + (e.payload.message_key || "");
+  msg(text, e.payload.retryable !== true);
+  if (e.payload.retryable) $("password").focus();
+});
+listen("vpn://log", e => {
+  const box = $("log");
+  const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
+  box.textContent += e.payload.line + "\n";
+  if (atBottom) box.scrollTop = box.scrollHeight;
+  if (box.textContent.length > 200000) box.textContent = box.textContent.slice(-100000);
+});
+
+await loadProfiles();
+await refreshHelper();
+setState("idle");
+invoke("backend_info").then(i => {
+  if (!i.openconnect_version) msg("未找到 openconnect，请先安装", true);
+});
+</script>
+</body>
+</html>

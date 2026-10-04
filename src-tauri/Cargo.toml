@@ -1,0 +1,39 @@
+[package]
+name = "wthinkvpn"
+version = "0.1.0"
+description = "Cross-platform openconnect desktop client"
+authors = ["wthink"]
+license = ""
+repository = ""
+edition = "2024"
+rust-version = "1.90"
+
+[lib]
+name = "wthinkvpn_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.7.1", features = [] }
+
+[dependencies]
+oc-proto = { path = "crates/oc-proto" }
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+toml = "0.9"
+keyring = "4"
+dirs = "6"
+tauri = { version = "2.12.1", features = [] }
+tauri-plugin-log = "2"
+rand = "0.10.3"
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
+x509-parser = "0.18.1"
+sha2 = "0.11.0"
+base64 = "0.23.1"
+
+[target."cfg(unix)".dependencies]
+libc = "0.2.190"
+
+[dev-dependencies]
+libc = "0.2"
+tempfile = "3"

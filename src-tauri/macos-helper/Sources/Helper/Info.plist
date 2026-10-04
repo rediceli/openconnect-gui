@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleIdentifier</key>
+  <string>io.wthink.wthinkvpn.helper</string>
+  <key>CFBundleName</key>
+  <string>WthinkVPNHelper</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1.0</string>
+  <key>CFBundleVersion</key>
+  <string>0.1.0</string>
+  <!--
+    ⚠️ 这个 plist **不会**被编进二进制（见 Package.swift 的说明）。
+    Team ID 的实际来源是 launchd plist 的 EnvironmentVariables。
+    保留此文件仅供参考与人工排查。
+  -->
+  <key>WthinkVPNTeamID</key>
+  <string>__TEAM_ID_UNSET__</string>
+</dict>
+</plist>

@@ -1,0 +1,16 @@
+[2026-10-03 05:51:56] POST https://127.0.0.1:8443/
+[2026-10-03 05:51:56] Attempting to connect to server 127.0.0.1:8443
+[2026-10-03 05:51:56] Connected to 127.0.0.1:8443
+[2026-10-03 05:51:56] SSL negotiation with 127.0.0.1
+[2026-10-03 05:51:56] Connected to HTTPS on 127.0.0.1 with ciphersuite (TLS1.3)-(ECDHE-X25519)-(RSA-PSS-RSAE-SHA256)-(AES-256-GCM)
+[2026-10-03 05:51:56] Got HTTP response: HTTP/1.1 200 OK
+[2026-10-03 05:51:56] Server: BaseHTTP/0.6 Python/3.14.7
+[2026-10-03 05:51:56] Date: Sat, 03 Oct 2026 12:51:56 GMT
+[2026-10-03 05:51:56] Content-Type: text/xml; charset=utf-8
+[2026-10-03 05:51:56] Content-Length: 622
+[2026-10-03 05:51:56] Set-Cookie: webvpn=<elided>; path=/; secure
+[2026-10-03 05:51:56] HTTP body length:  (622)
+[2026-10-03 05:51:56] XML POST enabled
+Please enter your username and password.
+[2026-10-03 05:51:56] Auth choice "NoSuchGroup" not available
+GROUP: [|Engineering|Operations]:fgets (stdin): Operation now in progress
