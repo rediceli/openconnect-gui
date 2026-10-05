@@ -44,6 +44,26 @@ struct SessionHandle {
 
 use std::sync::Arc;
 
+/// 状态变化的**唯一出口**：同时推给前端与状态栏图标。
+///
+/// 之前有 5 处直接 `app.emit(STATE, ...)`，托盘状态得在每一处都同步一遍
+/// —— 漏一处就出现「窗口显示已连接、菜单栏还写着未连接」。
+/// 收口到这里就不可能漏。
+fn emit_state(app: &AppHandle, payload: StatePayload) {
+    let (label, connected) = match payload.state {
+        ConnState::Idle => ("未连接", false),
+        ConnState::Connecting => ("连接中…", false),
+        ConnState::AwaitingUser => ("等待输入…", false),
+        ConnState::Authenticating => ("认证中…", false),
+        ConnState::Configuring => ("建立隧道…", false),
+        ConnState::Connected => ("已连接", true),
+        ConnState::Reconnecting => ("重连中…", true),
+        ConnState::Failed => ("连接失败", false),
+    };
+    crate::tray::update_status(app, label, connected);
+    let _ = app.emit(events::STATE, payload);
+}
+
 /// 供前端消费的连接状态快照
 #[derive(Serialize, Clone)]
 pub struct StatePayload {
@@ -475,8 +495,8 @@ pub fn connect(
             pid_slot_for_stream,
             move |ev| match ev {
                 channel::StreamEvent::Started { pid } => {
-                    let _ = app_state.emit(
-                        events::STATE,
+                    emit_state(
+                        &app_state,
                         StatePayload {
                             state: ConnState::Connecting,
                             profile_id: id_state.clone(),
@@ -499,8 +519,9 @@ pub fn connect(
                         );
                     }
                     if let Some(s) = state {
-                        let _ = app_log.emit(
-                            events::STATE,
+                        // 日志推进的状态变化也要同步到托盘
+                        emit_state(
+                            &app_log,
                             StatePayload {
                                 state: s,
                                 profile_id: id_log.clone(),
@@ -510,8 +531,8 @@ pub fn connect(
                     }
                 }
                 channel::StreamEvent::Finished { state, cause } => {
-                    let _ = app_state.emit(
-                        events::STATE,
+                    emit_state(
+                        &app_state,
                         StatePayload {
                             state,
                             profile_id: id_state.clone(),
@@ -536,8 +557,8 @@ pub fn connect(
                     }
                 }
                 channel::StreamEvent::Exited { code } => {
-                    let _ = app_state.emit(
-                        events::STATE,
+                    emit_state(
+                        &app_state,
                         StatePayload {
                             state: ConnState::Idle,
                             profile_id: id_state.clone(),
@@ -547,6 +568,16 @@ pub fn connect(
                     let _ = code;
                 }
                 channel::StreamEvent::Failed { message, key } => {
+                    // 失败要先发 CAUSE（带原因），再发 STATE（转 Failed）——
+                    // 顺序反了前端会先看到 Failed 再补原因，出现闪烁。
+                    emit_state(
+                        &app_state,
+                        StatePayload {
+                            state: ConnState::Failed,
+                            profile_id: id_state.clone(),
+                            pid: None,
+                        },
+                    );
                     let _ = app_state.emit(
                         events::CAUSE,
                         CausePayload {
@@ -593,6 +624,31 @@ pub fn connect(
         }
     }
     Ok(())
+}
+
+/// 托盘状态自检。「关闭按钮是否缩到托盘」的排查入口。
+#[tauri::command]
+pub fn tray_status(app: AppHandle) -> crate::tray::TrayStatus {
+    crate::tray::status(&app)
+}
+
+/// 显示并聚焦主窗口（托盘菜单点击、窗口隐藏后都走这里）。
+#[tauri::command]
+pub fn show_main_window(app: AppHandle) {
+    crate::tray::show_main_window(&app);
+}
+
+/// 显式退出 App。
+///
+/// 关闭按钮现在是「隐藏到托盘」，所以必须有一条明确的退出路径，
+/// 否则用户点了关闭之后就再也找不到退出入口了。
+///
+/// 退出前先断隧道 —— 否则会留下孤儿 openconnect 进程与残留路由，
+/// 那是最难排查的一类脏状态。
+#[tauri::command]
+pub fn quit_app(app: AppHandle) {
+    let _ = disconnect(app.clone());
+    app.exit(0);
 }
 
 #[tauri::command]

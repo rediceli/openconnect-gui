@@ -16,6 +16,7 @@ pub mod secret;
 mod testenv;
 
 pub mod tlsprobe;
+pub mod tray;
 pub mod tunnel;
 use serde::Serialize;
 
@@ -60,8 +61,32 @@ pub fn run() {
             commands::open_system_settings,
             commands::probe_server_cert,
             commands::trust_server_cert,
+            commands::tray_status,
+            commands::show_main_window,
+            commands::quit_app,
         ])
-        .setup(commands::setup)
-        .run(tauri::generate_context!())
-        .expect("error while building tauri application");
+        .setup(|app| {
+            commands::setup(app)?;
+            // 托盘必须在 setup 里建：它依赖 AppHandle，而 window 事件
+            // 回调也要用到托盘是否存在。
+            if let Err(e) = tray::install(app.handle()) {
+                // 装不上不致命 —— 关闭按钮会退化为直接退出，
+                // 但窗口和连接功能不受影响。
+                log::warn!("托盘安装失败，关闭按钮将直接退出: {e}");
+            }
+            Ok(())
+        })
+        .on_window_event(tray::on_window_event)
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app, event| {
+            // Dock 点击 / 重新激活
+            if let tauri::RunEvent::Reopen {
+                has_visible_windows: false,
+                ..
+            } = event
+            {
+                tray::on_reopen(app);
+            }
+        });
 }

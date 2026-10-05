@@ -23,7 +23,7 @@ log = "0.4"
 toml = "0.9"
 keyring = "4"
 dirs = "6"
-tauri = { version = "2.12.1", features = [] }
+tauri = { version = "2.12.1", features = ["tray-icon", "image-png"] }
 tauri-plugin-log = "2"
 rand = "0.10.3"
 rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }

@@ -273,6 +273,22 @@ $("go").onclick = async () => {
 };
 
 // ---- 特权助手 ----
+async function refreshTray() {
+  try {
+    const t = await invoke("tray_status");
+    if (t.installed) {
+      $("tray-msg").textContent =
+        "关闭窗口会缩到菜单栏图标，右键图标可断开或退出。";
+    } else {
+      // 不能只说「关闭会退出」—— 用户需要知道为什么、以及怎么修
+      $("tray-msg").textContent =
+        "状态栏图标不可用（缺少托盘图标），关闭窗口将直接退出 App。";
+    }
+  } catch (e) {
+    $("tray-msg").textContent = "无法检测状态栏图标: " + e;
+  }
+}
+
 async function refreshHelper() {
   try {
     const h = await invoke("helper_status");
@@ -372,6 +388,13 @@ $("helper-btn").addEventListener("click", startHelper);
 $("save-prof").addEventListener("click", saveProfile);
 $("clear-log").addEventListener("click", () => { $("log").textContent = ""; });
 
+// 托盘相关的两个按钮。
+//
+// 「退出」不可省：关闭按钮已改成「隐藏到托盘」，若没有明确的退出
+// 入口，用户点完关闭就找不到怎么真正关掉 App 了。
+$("btn-show").addEventListener("click", () => invoke("show_main_window"));
+$("btn-quit").addEventListener("click", () => invoke("quit_app"));
+
 // 启动序列：**每一步独立**，失败不许掐断后续步骤。
 //
 // 之前是一条顶层 await 链：`loadProfiles()` 一旦抛错，
@@ -384,6 +407,11 @@ async function boot() {
   } catch (e) {
     msg("加载配置失败: " + e, true);
     console.error("loadProfiles", e);
+  }
+  try {
+    await refreshTray();
+  } catch (e) {
+    console.error("refreshTray", e);
   }
   try {
     await refreshHelper();
