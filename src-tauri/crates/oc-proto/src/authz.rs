@@ -330,6 +330,29 @@ pub fn per_user_pipe_name(sid_suffix: &str) -> String {
     format!(r"\\.\pipe\oc-gui-{ENDPOINT_PREFIX}-{sid_suffix}")
 }
 
+/// 若 `path` 上有残留的 socket 文件，清理它。
+///
+/// 返回 `Ok(true)` = 已清理残留；`Ok(false)` = 有实例在监听，未动。
+///
+/// 分辨方式是**实际尝试连接**：`connect` 成功说明有活着的 listener；
+/// 失败（ECONNREFUSED）说明只是上次进程留下的死文件。
+///
+/// 不能只看「文件是否存在」就 unlink —— 那会允许第二个 daemon
+/// 抢占同一路径，出现两个实例、客户端连到谁都说不清。
+pub fn reclaim_stale_socket(path: &std::path::Path) -> io::Result<bool> {
+    use std::os::unix::net::UnixStream;
+    if !path.exists() {
+        return Ok(false);
+    }
+    if UnixStream::connect(path).is_ok() {
+        return Ok(false);
+    }
+    std::fs::remove_file(path).map_err(|e| {
+        io::Error::new(e.kind(), format!("清理残留 socket {} 失败: {e}", path.display()))
+    })?;
+    Ok(true)
+}
+
 /// 创建/接管每用户 socket。
 ///
 /// 步骤（Linux）：
@@ -361,12 +384,38 @@ pub fn create_per_user_socket(uid: u32) -> std::io::Result<std::os::unix::net::U
     }
 
     let path = per_user_socket_path(uid);
-    // 已存在 = 可能被抢占或上次未清理。拒绝，不复用。
-    if path.exists() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::AlreadyExists,
-            format!("{} 已存在，拒绝复用（可能被抢占）", path.display()),
-        ));
+
+    // ── 处理已存在的 socket 文件 ──
+    //
+    // 踩过一个大坑：这里原本是「已存在就拒绝」，理由是防止被抢占。
+    // 但 `UnixListener::bind` 在路径存在时必然失败，而 socket 文件
+    // 在进程被杀后**仍然留在磁盘上** —— 于是：
+    //
+    //   第一次启动 → 建 socket，正常
+    //   bootout / 崩溃 / 重启 → socket 文件残留
+    //   第二次启动 → 发现文件存在 → 拒绝 → 退出 1
+    //   KeepAlive 不断重试 → **永久无法启动**
+    //
+    // 也就是说任何一次非正常关闭都会让助手彻底废掉。实测踩到。
+    //
+    // 不能无条件 unlink：那会允许第二个 daemon 抢占同一个路径，
+    // 出现两个实例、客户端连到谁都说不清。所以先**探测**：
+    //
+    //   - 能连上 → 真的有另一个实例在监听 → 拒绝，不动它的 socket
+    //   - 连不上（ECONNREFUSED）→ 是残留的死文件 → 删掉重建
+    //
+    // 只有 root 能在 /var/run 里创建文件，而 socket 的属主随后会被
+    // chown 成目标 uid，所以这里面对的不是「不可信路径」而是
+    // 「上次自己留下的垃圾」。
+    match reclaim_stale_socket(&path) {
+        Ok(true) => {}  // 残留，已清理
+        Ok(false) => {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AddrInUse,
+                format!("{} 已有另一个 helper 实例在监听，拒绝启动", path.display()),
+            ));
+        }
+        Err(e) => return Err(e),
     }
 
     let listener = UnixListener::bind(&path)?;
@@ -515,6 +564,59 @@ mod tests {
     /// 关键安全断言：允许列表永远不能被 argv 影响。
     ///
     /// 若将来有人想「按命令行参数决定授权」，这个测试会挡住。
+    /// 残留的 socket 文件不能让助手变成「永久无法启动」。
+    ///
+    /// 实测踩到的大坑：`create_per_user_socket` 原本「已存在就拒绝」，
+    /// 而 `UnixListener::bind` 在路径存在时必然失败。socket 文件在
+    /// 进程被杀后仍留在磁盘上，于是 bootout / 崩溃 / 重启之后，
+    /// 下一个实例永远拒绝启动，KeepAlive 反复重试也没用。
+    ///
+    /// 这个测试直接复现该序列：建 → 删（模拟进程被杀）→ 再建。
+    #[cfg(unix)]
+    #[test]
+    fn stale_socket_file_is_reclaimed() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("helper-1000.sock");
+
+        // 第一次：正常创建
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let l = std::os::unix::net::UnixListener::bind(&path).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+            assert!(path.exists());
+            drop(l); // 模拟进程退出 —— 注意 socket 文件仍在
+        }
+        assert!(path.exists(), "socket 文件在进程退出后确实会残留");
+
+        // 第二次：应当清理残留并重建，而不是报 AlreadyExists
+        match reclaim_stale_socket(&path) {
+            Ok(true) => {} // 已清理
+            Ok(false) => panic!("不应报告「有实例在监听」"),
+            Err(e) => panic!("清理残留失败: {e}"),
+        }
+        assert!(!path.exists(), "残留文件应被删除");
+        std::os::unix::net::UnixListener::bind(&path).expect("应能重新绑定");
+    }
+
+    /// 但**绝不能**抢占一个真正在监听的 socket。
+    ///
+    /// 否则会出现两个 daemon 同时服务同一个路径，客户端连到谁都
+    /// 说不清 —— 那才是真正的安全/正确性问题。
+    #[cfg(unix)]
+    #[test]
+    fn live_socket_is_not_reclaimed() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("helper-1000.sock");
+        let _live = std::os::unix::net::UnixListener::bind(&path).unwrap();
+
+        assert_eq!(
+            reclaim_stale_socket(&path).ok(),
+            Some(false),
+            "有实例在监听时必须拒绝回收"
+        );
+        assert!(path.exists(), "活着的 socket 不能被删");
+    }
+
     /// 刻意**不加** `#[cfg(target_os = "windows")]`。
     ///
     /// 这两段都只是字符串检查，在任何平台都能跑。之前把它们门控到

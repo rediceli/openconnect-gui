@@ -296,7 +296,17 @@ log "launchctl bootstrap system/$LABEL"
 # ⚠️ 必须捕获 stderr：launchctl 把「服务已存在」之类、以及真正的
 # 失败原因都写到 stderr。只看返回值会以为成功了。
 bootstrap_err="$(mktemp)"
-if launchctl bootstrap "system/$PLIST" 2>"$bootstrap_err"; then
+# ⚠️ `bootstrap` 需要**两个**参数：domain 与 plist 路径。
+#
+# 踩过一个大坑：原先写成 `launchctl bootstrap "system/$PLIST"` ——
+# 那是**一个**参数 `system//Library/LaunchDaemons/....plist`。
+# launchctl 不报参数错误，反而**返回 0**，于是脚本以为成功了，
+# 但服务根本没被加载。表现为：
+#   bootstrap 返回 0 → 紧接着 print 查不到 → 「daemon 未运行」
+# 而手工执行 `launchctl bootstrap system /Library/....plist`（两个参数）
+# 却完全正常。所以这个 bug 靠读脚本是看不出来的，只有对照
+# 实际成功的手工命令才能发现。
+if launchctl bootstrap system "$PLIST" 2>"$bootstrap_err"; then
   if [[ -s "$bootstrap_err" ]]; then
     printf '\033[1;33m注意:\033[0m launchctl bootstrap 说了：\n' >&2
     sed 's/^/  /' "$bootstrap_err" >&2

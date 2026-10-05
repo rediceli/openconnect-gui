@@ -25,15 +25,16 @@ fn main() {
 
     // Direct 模式下程序不存在应给出明确错误。
     //
-    // 必须先把 helper 端点摘掉：否则 `Channel::detect` 仍然会连上
-    // helper（第一段刚启动了一个），于是 ch2 是 Helper 而非 Direct，
-    // 断言的前提就不对了。
+    // 必须让 `Channel::detect` **探测不到** helper。
     //
-    // 这类「测试依赖环境状态」的坑：`cargo run --example` 继承父进程
-    // 的环境变量，测试自己设的 OCGUI_HELPER_SOCKET 会一直生效。
+    // 原先只是 `remove_var("OCGUI_HELPER_SOCKET")`，但那只摘掉了环境
+    // 变量覆盖 —— 一旦机器上真装了 daemon（/var/run/oc-gui/helper-<uid>.sock
+    // 存在），默认路径照样能连上，ch2 仍是 Helper，断言前提就错了。
+    //
+    // 改成指向一个确定不存在的路径，才能真正模拟「helper 不可用」。
     unsafe {
         std::env::set_var("OCGUI_OPENCONNECT", "/nonexistent/openconnect");
-        std::env::remove_var("OCGUI_HELPER_SOCKET");
+        std::env::set_var("OCGUI_HELPER_SOCKET", "/nonexistent/helper.sock");
     }
     let mut ch2 = Channel::detect(uid);
     assert!(
