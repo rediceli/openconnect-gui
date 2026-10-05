@@ -427,6 +427,10 @@ fn handle(stream: UnixStream, slot: &SessionSlot) {
                                 uptime_secs: None,
                             },
                         );
+                        // 不在这里 break：会话槽是全局的，由**发起连接的那条**
+                        // 连接返回时释放，而那条连接正阻塞在等下一条请求。
+                        // GUI 侧把 State 当终态、随即关闭日志流连接，
+                        // 那边读到 EOF 才会退出并清槽（见 ipc/client.rs）。
                     }
                     None => send(
                         &w,

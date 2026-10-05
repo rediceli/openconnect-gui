@@ -357,54 +357,39 @@ impl Channel {
                     stdin_secrets: plan.stdin_secrets.iter().map(to_ipc_secret).collect(),
                     token_secret: None,
                 };
-                let mut got_pid = false;
-                // 完整 Tracker 跨整个日志流保持一个实例 ——
-                // 与 Direct 通道完全同一套判定规则。之前的「单行判据」
-                // 会丢掉需要多行累积的状态（如 Configuring）与
-                // TerminalCause 的具体分类。
-                let mut tracker = crate::tunnel::Tracker::new();
-                h.pump_stream(&req, |msg| match msg {
-                    Response::Started { pid } => {
-                        *pid_out.lock().unwrap() = Some(pid);
-                        got_pid = true;
-                        on_event(StreamEvent::Started { pid });
+
+                let (mut got_pid, mut err) = pump_start(h, &req, &pid_out, &mut on_event);
+
+                // helper 的会话槽要等 openconnect 真正被回收才释放。
+                // 用户「断开后立刻重连」时槽往往还占着 —— 那是收尾中的
+                // 正常状态而非错误，所以原地重试（同一 socket 上再发一条
+                // Start，helper 仍停在收请求的循环里）。
+                for _ in 0..BUSY_RETRY {
+                    if got_pid || !matches!(err, Some(HelperError::AlreadyConnected)) {
+                        break;
                     }
-                    Response::Log { line } => {
-                        let state = tracker.feed_line(&line).map(|(_, to)| to);
-                        on_event(StreamEvent::Log { line, state });
-                    }
-                    Response::State { state, cause } => {
-                        on_event(StreamEvent::Finished {
-                            state: parse_state(&state),
-                            cause: cause.and_then(parse_cause),
-                        })
-                    }
-                    Response::Exited { code } => {
-                        // helper 侧只知道退出码，具体原因由 GUI 用
-                        // Tracker 累积的日志推断。
-                        tracker.on_exit(code);
-                        let cause = tracker.cause();
-                        on_event(StreamEvent::Finished {
-                            state: tracker.state(),
-                            cause: cause
-                                .map(|c| (c.message_key().to_string(), c.is_retryable())),
-                        });
-                        on_event(StreamEvent::Exited { code });
-                    }
-                    Response::Failed { error } => {
-                        on_event(StreamEvent::Failed {
-                            message: error.to_string(),
-                            key: error.message_key().to_string(),
-                        });
-                    }
-                    _ => {}
-                });
-                if !got_pid {
-                    return Err(ChannelError::Helper(HelperError::Internal {
-                        message: "helper 未返回 Started".into(),
-                    }));
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                    (got_pid, err) = pump_start(h, &req, &pid_out, &mut on_event);
                 }
-                Ok(())
+                if got_pid {
+                    return Ok(());
+                }
+
+                match err {
+                    // 失败用StreamEvent::Failed 上报就够了；这里再返回一条
+                    // Err 会让上层补一条 CAUSE，把真实原因盖成
+                    // 「helper 未返回 Started」。
+                    Some(e) => {
+                        on_event(StreamEvent::Failed {
+                            message: e.to_string(),
+                            key: e.message_key().to_string(),
+                        });
+                        Ok(())
+                    }
+                    None => Err(ChannelError::Helper(HelperError::Internal {
+                        message: "helper 未返回 Started".into(),
+                    })),
+                }
             }
             Channel::Direct { program: _ } => {
                 let running = self.start(plan)?;
@@ -589,6 +574,63 @@ pub enum StreamEvent {
     Exited { code: Option<i32> },
     /// 出错
     Failed { message: String, key: String },
+}
+
+/// helper 报「已有连接」时重试几次（每次间隔 250ms）。
+///
+/// 上限 4 次 ≈ 1s：openconnect 收到 SIGINT 后退场通常在几百毫秒内，
+/// 超过这个量级就不是「收尾中」而是真的有别人的隧道了 ——
+/// 那时应当如实报错，而不是让用户盯着一个不动的界面。
+const BUSY_RETRY: usize = 4;
+
+/// 在 helper 通道上跑一次 Start，把响应流喂给 `on_event`。
+///
+/// 返回 `(是否拿到 pid, 流里遇到的第一个失败)`。失败**不在**这里上报：
+/// 「已有连接」可能要重试，提前上报会让状态在失败/连接中之间闪。
+fn pump_start(
+    h: &mut ipc::client::HelperHandle,
+    req: &Request,
+    pid_out: &std::sync::Arc<std::sync::Mutex<Option<u32>>>,
+    on_event: &mut impl FnMut(StreamEvent),
+) -> (bool, Option<HelperError>) {
+    let mut got_pid = false;
+    let mut err: Option<HelperError> = None;
+    // 完整 Tracker 跨整个日志流保持一个实例 —— 与 Direct 通道完全
+    // 同一套判定规则。之前的「单行判据」会丢掉需要多行累积的状态
+    // （如 Configuring）与 TerminalCause 的具体分类。
+    let mut tracker = crate::tunnel::Tracker::new();
+    h.pump_stream(req, |msg| match msg {
+        Response::Started { pid } => {
+            *pid_out.lock().unwrap() = Some(pid);
+            got_pid = true;
+            on_event(StreamEvent::Started { pid });
+        }
+        Response::Log { line } => {
+            let state = tracker.feed_line(&line).map(|(_, to)| to);
+            on_event(StreamEvent::Log { line, state });
+        }
+        Response::State { state, cause } => {
+            on_event(StreamEvent::Finished {
+                state: parse_state(&state),
+                cause: cause.and_then(parse_cause),
+            })
+        }
+        Response::Exited { code } => {
+            // helper 侧只知道退出码，具体原因由 GUI 用
+            // Tracker 累积的日志推断。
+            tracker.on_exit(code);
+            let cause = tracker.cause();
+            on_event(StreamEvent::Finished {
+                state: tracker.state(),
+                cause: cause.map(|c| (c.message_key().to_string(), c.is_retryable())),
+            });
+            on_event(StreamEvent::Exited { code });
+        }
+        // 只留第一个失败：后面的通常是它的连带结果。
+        Response::Failed { error } if err.is_none() => err = Some(error),
+        _ => {}
+    });
+    (got_pid, err)
 }
 
 /// 协议里的状态名 → 强类型。

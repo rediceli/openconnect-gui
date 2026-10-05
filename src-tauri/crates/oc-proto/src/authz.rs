@@ -339,6 +339,10 @@ pub fn per_user_pipe_name(sid_suffix: &str) -> String {
 ///
 /// 不能只看「文件是否存在」就 unlink —— 那会允许第二个 daemon
 /// 抢占同一路径，出现两个实例、客户端连到谁都说不清。
+///
+/// 仅 unix：函数体用 `UnixStream`，而 Windows 走 named pipe
+/// （见 `windows_endpoint`），没有「残留文件」这回事。
+#[cfg(unix)]
 pub fn reclaim_stale_socket(path: &std::path::Path) -> io::Result<bool> {
     use std::os::unix::net::UnixStream;
     if !path.exists() {

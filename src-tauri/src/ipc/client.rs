@@ -291,7 +291,17 @@ impl HelperHandle {
                     continue;
                 }
             };
-            let terminal = matches!(msg, Response::Exited { .. });
+            // State 也是终态：helper 只在**优雅断开收尾完成**时发它
+            // （`Response::State{state:"idle"}`），发完这条连接就没用了。
+            //
+            // 之前只把 Exited/Failed 当终态，于是断开后 GUI 一直阻塞在
+            // read_line 上等下一条 —— 而 helper 那边正等着 GUI 的下一条
+            // 请求才能退出、释放会话槽。两边互等，结果是「断开后立刻
+            // 重连」永远撞上「已有连接在进行中」，只能重启 App。
+            let terminal = matches!(
+                msg,
+                Response::Exited { .. } | Response::State { .. }
+            );
             let failed = matches!(&msg, Response::Failed { .. });
             on_event(msg);
             if terminal || failed {

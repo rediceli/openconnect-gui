@@ -8,7 +8,7 @@
 //!
 //! 前端只需订阅事件，不做轮询。
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use serde::Serialize;
@@ -31,9 +31,14 @@ pub struct AppState {
     pub repo: Repo,
     /// 当前运行的连接（若有）
     session: Mutex<Option<Box<SessionHandle>>>,
+    /// 会话代号自增器。隧道自然结束时靠它判断「要清的是不是我自己」，
+    /// 免得把用户随后新建的会话误清掉。
+    next_session_id: AtomicU64,
 }
 
 struct SessionHandle {
+    /// 会话代号（见 `AppState::next_session_id`）。
+    id: u64,
     /// openconnect 的 pid，由 connect 线程在 spawn 成功后写入。
     /// 保留给未来「断开超时强杀」用 —— 当前 SIGINT 由 cancel 轮询线程负责。
     #[allow(dead_code)]
@@ -444,23 +449,52 @@ pub fn connect(
     cookie: Option<String>,
 ) -> Result<(), String> {
     // ---- 单连接互斥 ----
+    //
+    // 上一条隧道刚断开时，openconnect 还在退场（SIGINT → 进程回收 →
+    // 隧道线程清 session），这几百毫秒里 session 仍是 Some。此时用户
+    // 「断开后立刻重连」会被硬拒一次，报「已有连接在进行中」—— 而用户
+    // 明明看到的是未连接。
+    //
+    // 所以这里给它一个短暂的等待窗口，而不是立刻报错。锁在每次尝试前
+    // 都重新获取，绝不抱着锁睡觉。
     {
-        let state = st(&app)?;
-        let s = state.session.lock().map_err(to_err)?;
-        if s.is_some() {
-            return Err("已有连接在进行中".into());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            let busy = {
+                let state = st(&app)?;
+                state.session.lock().map_err(to_err)?.is_some()
+            };
+            if !busy {
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                return Err("上一条连接还在收尾，请稍后再试".into());
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
         }
     }
 
-    // ---- 取密钥 ----
+// ---- 取密钥 ----
     // 优先级：显式传入 > 钥匙串
     let pw = password.or_else(|| secret::password(&profile));
+    let token = secret::token_secret(&profile);
+
+    // 密码和 token 都没有就别开隧道了。
+    //
+    // openconnect 拿不到密码时会退回去读 stdin 上的交互提示，而
+    // helper/直连给的 stdin 都是无 tty 的管道 —— 结果它卡在
+    // "Please enter your password." 上，直到 fgets 报错才退出。
+    // 用户只看到连接失败，完全不知道「密码压根没填」。
+    if pw.is_none() && token.is_none() {
+        return Err("未提供密码，系统钥匙串里也没有保存 —— 请先填写密码".into());
+    }
+
     let secrets = argv::Secrets {
         password: pw,
         cookie,
-        key_password: secret::key_password(&profile),
+key_password: secret::key_password(&profile),
         mca_key_password: secret::get(&profile, profile::SecretKind::McaKeyPassword).ok(),
-        token_secret: secret::token_secret(&profile),
+    token_secret: token,
     };
 
     // 构建期致命错误（如私钥口令无法安全写入 config 文件）直接拒绝，
@@ -476,10 +510,35 @@ pub fn connect(
     let cancel = Arc::new(AtomicBool::new(false));
     let pid_slot: Arc<Mutex<Option<u32>>> = Arc::new(Mutex::new(None));
 
+    // 会话代号必须在 spawn **之前**分配：隧道线程结束时要靠它确认
+    // 「session 里那个是我」，否则会把用户随后新建的会话误清掉。
+    let session_id = {
+        let state = st(&app)?;
+        state.next_session_id.fetch_add(1, Ordering::Relaxed)
+    };
+
     let h_cancel = cancel.clone();
     let h_app = app.clone();
     let h_profile_id = profile_id.clone();
     let h_pid = pid_slot.clone();
+
+    // 记录 session 句柄，供 disconnect 用。
+    //
+    // ⚠️ 必须放在 spawn **之前**：openconnect 可能在几十毫秒内就失败退出
+    // （密码为空、网关不可达…），隧道线程会先跑到结尾去清 session；
+    // 若此时 session 还没写进去，清空扑空、紧接着又写回一个僵尸句柄，
+    // 于是「已有连接在进行中」永久生效 —— 一次失败之后再也连不上，
+    // 只能重启 App。
+    {
+        let state = st(&app)?;
+        let mut s = state.session.lock().map_err(to_err)?;
+        *s = Some(Box::new(SessionHandle {
+            id: session_id,
+            pid: pid_slot.clone(),
+            cancel: cancel.clone(),
+        }));
+    }
+
     tauri::async_runtime::spawn_blocking(move || {
         // ---- 启动 + 流式转发 ----
         // 两种通道都走 start_streaming：Direct 读子进程管道，
@@ -531,6 +590,14 @@ pub fn connect(
                     }
                 }
                 channel::StreamEvent::Finished { state, cause } => {
+                    // 用户主动断开时，openconnect 被 SIGINT 带走、
+                    // 退出码非 0，状态机会判成 Failed —— 于是界面在
+                    // 「已断开」之后又闪一个红色的「失败」，还可能弹一条
+                    // 莫名其妙的错误。这里以 cancel 标志为准：是我们让
+                    // 它退的，就按正常断开收尾。
+                    let cancelled = h_cancel.load(Ordering::SeqCst);
+                    let state = if cancelled { ConnState::Idle } else { state };
+                    let cause = if cancelled { None } else { cause };
                     emit_state(
                         &app_state,
                         StatePayload {
@@ -610,19 +677,19 @@ pub fn connect(
             );
         }
 
+        // 隧道线程到此结束：无论成功、失败还是被 openconnect 自己吐掉，
+        // 都必须把 session 清掉，否则互斥锁会一直认为「已有连接在进行中」。
+        // 只清自己那一个 —— 用户可能已经断开会话并连了新的。
+        if let Ok(state) = st(&h_app)
+            && let Ok(mut s) = state.session.lock()
+            && s.as_ref().map(|h| h.id) == Some(session_id)
+        {
+            *s = None;
+        }
+
         let _ = h_cancel;
     });
 
-    // 记录 session 句柄，供 disconnect 用
-    {
-        let state = st(&app)?;
-        if let Ok(mut s) = state.session.lock() {
-            *s = Some(Box::new(SessionHandle {
-                pid: pid_slot,
-                cancel,
-            }));
-        }
-    }
     Ok(())
 }
 
@@ -689,6 +756,7 @@ pub fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     app.manage(AppState {
         repo,
         session: Mutex::new(None),
+        next_session_id: AtomicU64::new(1),
     });
     Ok(())
 }

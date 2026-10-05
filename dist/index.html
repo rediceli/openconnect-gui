@@ -17,23 +17,31 @@
        background:var(--bg);color:var(--text)}
   .wrap{max-width:430px;margin:0 auto;padding:20px}
   h1{font-size:17px;margin:0 0 16px}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:12px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:13px;margin-bottom:10px}
   .row{display:flex;align-items:center;justify-content:space-between;gap:10px}
-  label{display:block;font-size:12px;color:var(--muted);margin:10px 0 4px}
-  input,select{width:100%;padding:9px 10px;border:1px solid var(--line);border-radius:8px;
+  label{display:block;font-size:12px;color:var(--muted);margin:8px 0 3px}
+  input,select{width:100%;padding:7px 10px;border:1px solid var(--line);border-radius:8px;
                background:var(--bg);color:var(--text);font-size:14px}
   input:focus,select:focus{outline:2px solid var(--accent);outline-offset:-1px}
   button{width:100%;padding:11px;border:0;border-radius:8px;background:var(--accent);color:#fff;
          font-size:14px;font-weight:600;cursor:pointer;margin-top:14px}
   button:disabled{opacity:.5;cursor:not-allowed}
   button.ghost{background:transparent;color:var(--muted);border:1px solid var(--line)}
-  .pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600}
+  /* 行内的小按钮（状态行里的「菜单栏」「退出」等）。
+     必须同时给 width:auto 与 flex:0 0 auto：flex-basis 取自 width，
+     只写 flex 而漏掉 width 会被 button{width:100%} 架空并等宽拉伸。 */
+  .mini{width:auto;flex:0 0 auto;margin:0;padding:5px 10px;font-size:12px;
+        font-weight:500;border-radius:7px}
+  /* flex 容器里 pill 会被压成竖排（每个字一行），必须锁住
+     flex-shrink 与 nowrap —— 状态只有 3 个字却占 5 行高度。 */
+  .pill{display:inline-block;flex:0 0 auto;white-space:nowrap;
+        padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600}
   .s-idle{background:var(--line);color:var(--muted)}
   .s-connecting,.s-authenticating,.s-configuring,.s-reconnecting,.s-awaiting_user{
       background:#fef7e0;color:var(--warn)}
   .s-connected{background:#e6f4ea;color:var(--ok)}
   .s-failed{background:#fce8e6;color:var(--err)}
-  .msg{font-size:13px;color:var(--muted);margin-top:12px;min-height:20px}
+  .msg{font-size:12px;color:var(--muted);margin-top:8px;min-height:18px}
 
   /* ---- 证书信任弹窗（TOFU）---- */
   #certmask{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;
@@ -78,10 +86,23 @@
     <button id="tab-conn" class="on">连接</button>
     <button id="tab-prof">账号</button>
     <button id="tab-log">日志</button>
+    <button id="tab-cfg">设置</button>
   </div>
 
   <!-- 连接 -->
   <div id="v-conn">
+    <!-- 状态放在表单**上方**：VPN 类 App 里状态是第一眼要看的信息，
+         放在底部等于要滚动才看得见。 -->
+    <div class="card">
+      <div class="row">
+        <span class="pill s-idle" id="state">未连接</span>
+        <span style="flex:1"></span>
+        <button class="ghost mini" id="btn-show">菜单栏</button>
+        <button class="ghost mini" id="btn-quit">退出</button>
+      </div>
+      <div class="msg" id="tray-msg" style="margin-top:6px;font-size:11px"></div>
+    </div>
+
     <div class="card">
       <div class="row">
         <select id="profile" style="flex:1"></select>
@@ -98,25 +119,27 @@
       <button id="go">连接</button>
       <div class="msg" id="msg"></div>
     </div>
+  </div>
+
+  <!-- 设置：托盘与特权助手 -->
+  <div id="v-cfg" class="hide">
     <div class="card">
-      <div class="row"><span>状态</span><span class="pill s-idle" id="state">idle</span></div>
-      <div style="font-size:12px;color:var(--muted);margin-top:10px" id="tray-msg">
-        关闭窗口会缩到菜单栏图标，右键图标可断开或退出。
-      </div>
-      <div class="row" style="margin-top:10px;gap:8px">
-        <button class="ghost" id="btn-show" style="width:auto;margin:0;padding:6px 10px">显示菜单栏图标</button>
-        <button class="ghost" id="btn-quit" style="width:auto;margin:0;padding:6px 10px">退出</button>
+      <div class="row">
+        <div>
+          <b>菜单栏图标</b>
+          <div style="font-size:12px;color:var(--muted);margin-top:2px" id="tray-msg2">检测中…</div>
+        </div>
+        <button class="ghost mini" id="btn-show2">显示图标</button>
       </div>
     </div>
 
-    <!-- 特权助手 -->
     <div class="card" id="helper-card">
       <div class="row">
         <div>
           <b>特权助手</b>
           <div style="font-size:12px;color:var(--muted);margin-top:2px" id="helper-msg">检测中…</div>
         </div>
-        <button class="ghost" id="helper-btn" style="width:auto;margin:0;padding:7px 12px">提权启动</button>
+        <button class="ghost mini" id="helper-btn">提权启动</button>
       </div>
       <code id="helper-cmd" style="display:none;margin-top:10px;font-size:11px;
             background:var(--bg);border:1px solid var(--line);border-radius:6px;

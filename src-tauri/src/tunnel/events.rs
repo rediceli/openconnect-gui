@@ -553,6 +553,16 @@ impl Tracker {
         if self.state == State::Idle {
             return Some(TerminalCause::UserCancelled);
         }
+        // 非零退出但一条原因都没归类出来时，**必须**给出点什么。
+        //
+        // 没有这条兜底，GUI 会收到 Failed 状态却收不到任何 CAUSE，
+        // 提示就永远停在「正在连接…」—— 用户既不知道失败了，也
+        // 不知道原因（实测：密码留空时 openconnect 的
+        // "fgets (stdin): Inappropriate ioctl for device" 就属于这一类，
+        // 它既不是认证失败也不是网络问题）。
+        if self.state == State::Failed {
+            return Some(TerminalCause::Unknown { reason: all });
+        }
         if !all.is_empty() {
             return Some(TerminalCause::Unknown { reason: all });
         }

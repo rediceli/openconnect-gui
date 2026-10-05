@@ -231,6 +231,25 @@ fn user_cancel_is_not_an_error() {
 // ---------------------------------------------------------------------------
 
 #[test]
+fn failed_state_always_has_a_cause() {
+    // 非零退出、且日志里没有任何可归类的失败原因。
+    //
+ // 这正是「密码留空」那条路径：openconnect 退回去读 stdin 上的交互
+    // 提示，无 tty 的管道上 fgets 直接报错退出。若这里返回 None，
+    // GUI 就只收到 Failed 状态、没有 CAUSE，提示永远停在「正在连接…」。
+    let mut t = Tracker::new();
+    t.feed_line("[2026-10-05 00:20:43] Please enter your password.");
+    t.feed_line("[2026-10-05 00:20:43] Password:");
+    t.feed_line("fgets (stdin): Inappropriate ioctl for device");
+    t.on_exit(Some(1));
+    assert_eq!(t.state(), State::Failed);
+    assert!(
+        t.cause().is_some(),
+ "Failed 状态必须能给出原因，否则 UI 只会一直转圈"
+    );
+}
+
+#[test]
 fn connected_never_regresses_to_awaiting_user() {
     let mut t = Tracker::new();
     t.feed_line("[2026-10-03 02:00:00] Configured as 10.0.0.2/255.255.255.0, with SSL AES-256-GCM and UDP AES-256-GCM dtls");

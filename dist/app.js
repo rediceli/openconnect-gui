@@ -21,7 +21,7 @@ const STATE_LABEL = {
 };
 
 function tab(which) {
-  for (const k of ["conn","prof","log"]) {
+  for (const k of ["conn","prof","log","cfg"]) {
     $("v-"+k).classList.toggle("hide", k !== which);
     $("tab-"+k).classList.toggle("on", k === which);
   }
@@ -33,12 +33,48 @@ function msg(text, isErr) {
   el.className = "msg" + (isErr ? " err" : "");
 }
 
+// 「会话存在中」—— 这些状态下不能再次发起连接，否则会并发开第二条隧道。
+// 注意 awaiting_user（等待证书确认/表单输入）也算：那时连接还没断。
+const SESSION_ACTIVE = [
+  "connecting", "awaiting_user", "authenticating", "configuring", "reconnecting",
+];
+
+// 上一个状态是否属于「会话进行中」，以及这一轮结束是否已由 CAUSE 解释过。
+let wasActive = false;
+let endedByCause = false;
+// 用户主动点了「断开」——结束是预期内的，不要报成错误。
+let userStopped = false;
+
 function setState(s) {
   const pill = $("state");
   pill.textContent = STATE_LABEL[s] ?? s;
   pill.className = "pill s-" + s;
-  $("go").textContent = (s === "connected") ? "断开" : "连接";
-  $("go").disabled = ["connecting","authenticating","configuring","reconnecting"].includes(s);
+
+  const btn = $("go");
+  const connected = s === "connected";
+  const active = SESSION_ACTIVE.includes(s);
+
+  // 已连接时按钮是「断开」，必须可点 —— 它是唯一的断开入口。
+  // 其余有会话进行中的状态一律禁用，避免并发开第二条隧道。
+  btn.textContent = connected ? "断开" : "连接";
+  btn.disabled = active;
+  btn.title = active ? "连接进行中，请先断开" : "";
+
+  // 隧道「自己结束了」但没有给出原因（openconnect 非零退出、
+  // 没走到任何可识别分支）时，CAUSE 事件不来，提示就会永远停在
+  // 「正在连接…」，用户只看到状态跳回未连接却不知道发生了什么。
+  // 这里兜一句底，指向日志页。
+  //
+  // 只认 idle：Finished/Failed 都自带 CAUSE，抢在它前面弹这句会闪一下。
+  // 用户主动断开也不算异常 —— 那条路没有原因可解释。
+  if (wasActive && s === "idle" && !endedByCause && !userStopped) {
+    msg("连接已结束，详情见「日志」页", true);
+  }
+  if (s === "connected") msg("隧道已建立");
+  if (s === "idle" && userStopped) msg("已断开");
+  wasActive = active;
+  endedByCause = false;
+  if (s === "idle") userStopped = false;
 }
 
 async function loadProfiles() {
@@ -207,9 +243,11 @@ $("go").onclick = async () => {
   const btn = $("go");
   try {
     if (btn.textContent === "断开") {
+      userStopped = true;
       await invoke("disconnect");
       return;
     }
+    userStopped = false;
     // 以**已保存的 profile 为基底**，只覆盖表单里可见的那几个字段。
     //
     // 之前是从零重建 `{id,name,server,protocol,username,remember_password}`，
@@ -259,13 +297,19 @@ $("go").onclick = async () => {
         }
       }
 
+      // 「正在连接…」必须在 invoke **之前**写。
+      //
+      // 写在 await 之后会丢原因：一次连接会喷几十条日志 + 若干状态
+      // 事件，全是独立的 IPC 消息；事件密集时 invoke 的响应排在它们
+      // 后面，于是这句「正在连接…」反而在失败原因之后执行，把真正
+      // 的错误盖成一句永远转圈的提示（实测：密码为空导致的失败被盖掉）。
+      msg("正在连接…");
       await invoke("connect", {
         profile,
         password: $("password").value || null,
         cookie: null,
       });
       $("password").value = "";
-      msg("正在连接…");
     }
   } catch (e) {
     msg(String(e), true);
@@ -274,19 +318,18 @@ $("go").onclick = async () => {
 
 // ---- 特权助手 ----
 async function refreshTray() {
+  let text;
   try {
     const t = await invoke("tray_status");
-    if (t.installed) {
-      $("tray-msg").textContent =
-        "关闭窗口会缩到菜单栏图标，右键图标可断开或退出。";
-    } else {
-      // 不能只说「关闭会退出」—— 用户需要知道为什么、以及怎么修
-      $("tray-msg").textContent =
-        "状态栏图标不可用（缺少托盘图标），关闭窗口将直接退出 App。";
-    }
+    text = t.installed
+      ? "关闭窗口会缩到菜单栏图标，右键图标可断开或退出。"
+      : "菜单栏图标不可用（缺少托盘图标），关闭窗口将直接退出 App。";
   } catch (e) {
-    $("tray-msg").textContent = "无法检测状态栏图标: " + e;
+    text = "无法检测菜单栏图标: " + e;
   }
+  // 连接页只放一行简短提示，详情在设置页
+  $("tray-msg").textContent = text;
+  $("tray-msg2").textContent = text;
 }
 
 async function refreshHelper() {
@@ -357,14 +400,20 @@ listen("vpn://cause", e => {
   const text = c.reason && c.reason.length
     ? c.reason
     : "已结束：" + t(e.payload.message_key, e.payload.reason);
+  endedByCause = true;
   msg(text, e.payload.retryable !== true);
   if (e.payload.retryable) $("password").focus();
 });
 listen("vpn://log", e => {
   const box = $("log");
-  const atBottom = box.scrollTop + box.clientHeight >= box.scrollHeight - 20;
   box.textContent += e.payload.line + "\n";
-  if (atBottom) box.scrollTop = box.scrollHeight;
+  // 实时日志视图：始终跟随最新一行。
+  //
+  // 之前只在「原本贴着底部」时才滚动，但 textContent 赋值本身就抬高
+  // 了 scrollHeight，第一条把内容撑出可视区之后 atBottom 永远为假，
+  // 于是日志停在开头几行 —— 排查时最关键的那几行（fgets、auth失败、
+  // Exited）反而看不到。
+  box.scrollTop = box.scrollHeight;
   if (box.textContent.length > 200000) box.textContent = box.textContent.slice(-100000);
 });
 
@@ -392,7 +441,9 @@ $("clear-log").addEventListener("click", () => { $("log").textContent = ""; });
 //
 // 「退出」不可省：关闭按钮已改成「隐藏到托盘」，若没有明确的退出
 // 入口，用户点完关闭就找不到怎么真正关掉 App 了。
+$("tab-cfg").addEventListener("click", () => tab("cfg"));
 $("btn-show").addEventListener("click", () => invoke("show_main_window"));
+$("btn-show2").addEventListener("click", () => invoke("show_main_window"));
 $("btn-quit").addEventListener("click", () => invoke("quit_app"));
 
 // 启动序列：**每一步独立**，失败不许掐断后续步骤。
