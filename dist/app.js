@@ -45,6 +45,66 @@ let endedByCause = false;
 // 用户主动点了「断开」——结束是预期内的，不要报成错误。
 let userStopped = false;
 
+// ---- 连接时长 ----
+// 记下进入「已连接」的时刻，用 setInterval 自己走秒。
+// 不用服务端时间戳：openconnect 那边没有可用的「连接起始时刻」，
+// 而 GUI 进程一直活着，本地计时足够准。
+let connectedAt = null;
+let tickTimer = null;
+
+// ---- 收发统计 ----
+let lastStats = null;
+
+function fmtDuration(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const pad = (n) => String(n).padStart(2, "0");
+  return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${pad(m)}:${pad(s)}`;
+}
+
+// 单位换算是显示决策，放在前端而不是后端：后端只给原始字节数。
+function fmtBytes(n) {
+  if (n == null) return "—";
+  const u = ["B", "KB", "MB", "GB", "TB"];
+  let i = 0;
+  let v = n;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i += 1; }
+  return (i === 0 ? String(v) : v.toFixed(1)) + " " + u[i];
+}
+
+function renderStats() {
+  const box = $("stats");
+  const clock = $("stat-time");
+  if (!box || !clock) return;
+  const on = connectedAt !== null;
+  // 时长与统计同进同退：断开后留着上一次的数字会让人以为还在连。
+  box.classList.toggle("hide", !on);
+  clock.classList.toggle("hide", !on);
+  if (!on) return;
+  clock.textContent = fmtDuration(Date.now() - connectedAt);
+  const rx = $("stat-rx"), tx = $("stat-tx");
+  if (lastStats) {
+    rx.textContent = `${fmtBytes(lastStats.rxBytes)} / ${lastStats.rxPkts} 包`;
+    tx.textContent = `${fmtBytes(lastStats.txBytes)} / ${lastStats.txPkts} 包`;
+  } else {
+    // openconnect 的第一行统计要等一个周期才来，先别显示 0 ——
+    // 「0 B」会被误读成「流量真的是 0」。
+    rx.textContent = "等待数据…";
+    tx.textContent = "等待数据…";
+  }
+}
+
+function startTimer() {
+  if (tickTimer !== null) return;
+  tickTimer = setInterval(renderStats, 1000);
+}
+
+function stopTimer() {
+  if (tickTimer !== null) { clearInterval(tickTimer); tickTimer = null; }
+}
+
 function setState(s) {
   const pill = $("state");
   pill.textContent = STATE_LABEL[s] ?? s;
@@ -72,6 +132,20 @@ function setState(s) {
   }
   if (s === "connected") msg("隧道已建立");
   if (s === "idle" && userStopped) msg("已断开");
+
+  // 时长与统计只在「已连接」期间有意义。
+  // 重连（reconnecting → connected）不重置：隧道还是同一条，
+  // 用户视角里连接没断。
+  if (s === "connected") {
+    if (connectedAt === null) connectedAt = Date.now();
+    startTimer();
+  } else if (s === "idle" || s === "failed") {
+    connectedAt = null;
+    lastStats = null;
+    stopTimer();
+  }
+  renderStats();
+
   wasActive = active;
   endedByCause = false;
   if (s === "idle") userStopped = false;
@@ -327,8 +401,9 @@ async function refreshTray() {
   } catch (e) {
     text = "无法检测菜单栏图标: " + e;
   }
-  // 连接页只放一行简短提示，详情在设置页
-  $("tray-msg").textContent = text;
+  // 只在设置页展示。连接页原来也有一个同名元素，但它和状态区
+  // 的按钮绑在一起，已经移除了 —— 关闭窗口本来就缩到托盘，
+  // 在连接表单上方挂一句「去菜单栏断开或退出」纯属噪音。
   $("tray-msg2").textContent = text;
 }
 
@@ -386,6 +461,12 @@ async function startHelper() {
 }
 
 listen("vpn://state", e => setState(e.payload.state));
+listen("vpn://stats", e => {
+  // 隧道已断时迟到的统计行不该把归零后的计数显示出来。
+  if (connectedAt === null) return;
+  lastStats = e.payload;
+  renderStats();
+});
 listen("vpn://cause", e => {
   const c = e.payload.cause ?? {};
   // 权限问题要引导用户启动助手，而不是让用户反复重试
@@ -436,15 +517,16 @@ $("profile").addEventListener("change", render);
 $("helper-btn").addEventListener("click", startHelper);
 $("save-prof").addEventListener("click", saveProfile);
 $("clear-log").addEventListener("click", () => { $("log").textContent = ""; });
-
-// 托盘相关的两个按钮。
-//
-// 「退出」不可省：关闭按钮已改成「隐藏到托盘」，若没有明确的退出
-// 入口，用户点完关闭就找不到怎么真正关掉 App 了。
 $("tab-cfg").addEventListener("click", () => tab("cfg"));
-$("btn-show").addEventListener("click", () => invoke("show_main_window"));
+
+// 唤回窗口只剩设置页的「显示图标」一个入口。
+//
+// ⚠️ 这里删掉了连接页原有的「菜单栏」与「退出」两个按钮。
+// 「退出」删得掉是因为关闭窗口 = 缩到托盘，而托盘菜单里有「断开」
+// 和「退出」；真正的退出路径还在。若哪天托盘装不上，托盘菜单连
+// 同退出入口会一起消失 —— 那种情况下「无托盘即允许正常关闭」
+// （tray.rs 的 on_window_event）就是唯一的兜底。
 $("btn-show2").addEventListener("click", () => invoke("show_main_window"));
-$("btn-quit").addEventListener("click", () => invoke("quit_app"));
 
 // 启动序列：**每一步独立**，失败不许掐断后续步骤。
 //

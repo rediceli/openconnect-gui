@@ -7,4 +7,4 @@ pub mod signal;
 pub mod supervisor;
 
 pub use argv::{ArgPlan, Secrets, StdinSecret};
-pub use events::{parse_line, Event, Kind, Level, State, TerminalCause, Tracker};
+pub use events::{parse_line, parse_stats, Event, Kind, Level, State, Stats, TerminalCause, Tracker};

@@ -198,6 +198,56 @@ pub fn parse_line(raw: &str) -> Option<Event> {
     })
 }
 
+/// 收发统计。openconnect 只在收到 `SIGUSR1` 时打印一行 `RX:/TX:`
+/// （`print_connection_stats`），这是它唯一暴露的流量数据。
+///
+/// 抽成结构体而不是让前端去解析日志文本：格式一变（不同 openconnect
+/// 版本会加单位后缀）就会静默失效，而这里是 UI 上唯一的数据来源。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Stats {
+    pub rx_pkts: u64,
+    pub rx_bytes: u64,
+    pub tx_pkts: u64,
+    pub tx_bytes: u64,
+}
+
+/// 从一行 `RX: … TX: …` 里取出收发计数。
+///
+/// 格式由 `printf(_("RX: %"PRIu64" packets (%"PRIu64" B); TX: %"PRIu64
+/// " packets (%"PRIu64" B)\n"))` 生成，形状固定，手写解析比正则更省。
+///
+/// **故意不做单位换算**：`B` 是原始字节数，换算成 KB/MB 属于显示
+/// 决策，交给前端 —— 精度不该固化在后端。
+pub fn parse_stats(line: &str) -> Option<Stats> {
+    // 日志行带 `[timestamp] ` 前缀，必须先剥掉再找 "RX:" ——
+    // openconnect 是带 --timestamp 启动的，线上原文就带前缀。
+    let (_, body) = strip_timestamp(line.trim_end_matches(['\r', '\n']));
+    let rest = body.trim().strip_prefix("RX:")?;
+    let (rx, tx) = rest.split_once("; TX:")?;
+    Some(Stats {
+        rx_pkts: read_u64_before(rx, " packets")?,
+        rx_bytes: read_u64_before(rx, " B)")?,
+        tx_pkts: read_u64_before(tx, " packets")?,
+        tx_bytes: read_u64_before(tx, " B)")?,
+    })
+}
+
+/// 读 `prefix` 紧邻其前的那串数字。
+fn read_u64_before(s: &str, prefix: &str) -> Option<u64> {
+    let head = s.split_once(prefix)?.0;
+    let digits: String = head
+        .trim()
+        .chars()
+        .rev()
+        .take_while(char::is_ascii_digit)
+        .collect();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.chars().rev().collect::<String>().parse().ok()
+}
+
 /// 提取事件的附加字段。
 fn extract_field(body: &str, field: &str) -> Option<String> {
     match field {
@@ -633,6 +683,43 @@ mod tests {
     fn stats_line_recognised() {
         let e = one("[2026-10-03 02:10:00] RX: 1024 packets (65536 B); TX: 2048 packets (131072 B)");
         assert_eq!(e.kind, Kind::Stats);
+    }
+
+    #[test]
+    fn stats_numbers_extracted() {
+        let s = parse_stats("RX: 1024 packets (65536 B); TX: 2048 packets (131072 B)").unwrap();
+        assert_eq!(
+            s,
+            Stats { rx_pkts: 1024, rx_bytes: 65536, tx_pkts: 2048, tx_bytes: 131072 }
+        );
+    }
+
+    #[test]
+    fn stats_survive_timestamp_prefix() {
+        let s =
+            parse_stats("[2026-10-03 02:10:00] RX: 7 packets (700 B); TX: 3 packets (300 B)")
+                .unwrap();
+        assert_eq!(s.rx_bytes, 700);
+        assert_eq!(s.tx_pkts, 3);
+    }
+
+    #[test]
+    fn stats_ignore_non_stats_lines() {
+        // 统计必须只认那一种形状 —— 解析得太宽松会把别的日志行变成
+        // 流量数字，而这是 UI 上唯一的数据来源。
+        assert!(parse_stats("Configured as 10.0.0.2/255.255.255.0, with SSL").is_none());
+        assert!(parse_stats("RX: packets ( B); TX:  packets ( B)").is_none());
+    }
+
+    #[test]
+    fn stats_large_values_do_not_overflow() {
+        let s = parse_stats(
+            "RX: 9007199254740991 packets (18446744073709551615 B); TX: 0 packets (0 B)",
+        )
+        .unwrap();
+        assert_eq!(s.rx_pkts, 9007199254740991);
+        assert_eq!(s.rx_bytes, u64::MAX);
+        assert_eq!(s.tx_bytes, 0);
     }
 
     #[test]

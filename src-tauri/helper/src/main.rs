@@ -414,6 +414,44 @@ fn handle(stream: UnixStream, slot: &SessionSlot) {
                     Err(resp) => send(&w, resp),
                 }
             }
+            Request::Stats => {
+                // 代 GUI 给 openconnect 发 SIGUSR1 —— 它是唯一会打印
+                // `RX:/TX:` 的触发条件（`main.c:831` → `ssl.c:979`）。
+                //
+                // GUI 自己发不了：helper 以 root 跑，openconnect 也就
+                // 是 root 的子进程，而 GUI 是普通用户，kill 直接 EPERM。
+                let g = slot.lock().unwrap_or_else(|e| e.into_inner());
+                let pid = g.as_ref().map(|s| s.pid);
+                let sent = match pid {
+                    Some(pid) => std::process::Command::new("kill")
+                        .arg("-USR1")
+                        .arg(pid.to_string())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status()
+                        .map(|st| st.success())
+                        .unwrap_or(false),
+                    None => false,
+                };
+                match (pid, sent) {
+                    // 统计是异步打印的：这里只能确认信号已送达，数字
+                    // 会随后作为 Log 行从流里回来。
+                    (Some(pid), true) => send(
+                        &w,
+                        Response::Status {
+                            connected: true,
+                            pid: Some(pid),
+                            uptime_secs: None,
+                        },
+                    ),
+                    _ => send(
+                        &w,
+                        Response::Failed {
+                            error: HelperError::NotConnected,
+                        },
+                    ),
+                }
+            }
             Request::Stop => {
                 let g = slot.lock().unwrap_or_else(|e| e.into_inner());
                 match &*g {
@@ -685,8 +723,8 @@ fn dispatch_simple(req: Request) -> Response {
             eprintln!("收到 Shutdown");
             std::process::exit(0);
         }
-        // Start 由 handle() 单独处理，Stop 也需要 session 上下文
-        Request::Start { .. } | Request::Stop => Response::Failed {
+        // Start 由 handle() 单独处理，Stop/Stats 也需要 session 上下文
+        Request::Start { .. } | Request::Stop | Request::Stats => Response::Failed {
             error: HelperError::Internal {
                 message: "该请求应由会话循环处理".into(),
             },

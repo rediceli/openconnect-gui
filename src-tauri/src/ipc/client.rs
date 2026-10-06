@@ -349,6 +349,26 @@ impl HelperHandle {
         }
     }
 
+    /// 请 helper 触发一次收发统计。
+    ///
+    /// 统计数字不是应答，而是随后以 `Response::Log` 混在日志流里回来
+    /// —— 所以这里返回 `Ok(())` 只表示「信号已送达」，拿不到数字。
+    /// 解析在 `commands.rs` 的日志分支里做。
+    ///
+    /// 同样走**新开一条连接**：已有那条被 `pump_stream` 占着在读日志。
+    pub fn request_stats(uid: u32) -> Result<(), HelperError> {
+        let mut h = Self::connect(uid)?;
+        match h.request(&Request::Stats)? {
+            Response::Status { .. } => Ok(()),
+            // 旧 helper 不认识这个请求（serde 反序列化失败 → Failed）。
+            // 当作「这台机器上没有统计」，不该打断用户。
+            Response::Failed { .. } => Ok(()),
+            other => Err(HelperError::Internal {
+                message: format!("Stats 返回了意外响应: {other:?}"),
+            }),
+        }
+    }
+
     /// 通过 polkit/pkexec 启动 helper。
     ///
     /// 会弹一次密码框。**这是 GUI 唯一允许触发的提权路径**，

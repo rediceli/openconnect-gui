@@ -261,7 +261,10 @@ mod win {
                 }
             }
             Ok(Request::Start { args, server, .. }) => start_openconnect(&args, &server),
-            Ok(Request::Stop | Request::Status) => Response::Status {
+            // Stats 与 Status 一样返回空快照：Windows 的 openconnect spawn
+            // 还没实现（见 start_openconnect 的 TODO），根本没有隧道可统计。
+            // 等 spawn 落地后，这里要和 unix 版一样触发一次统计上报。
+            Ok(Request::Stop | Request::Stats | Request::Status) => Response::Status {
                 connected: false,
                 pid: None,
                 uptime_secs: None,

@@ -24,6 +24,8 @@ pub mod events {
     pub const STATE: &str = "vpn://state";
     pub const LOG: &str = "vpn://log";
     pub const CAUSE: &str = "vpn://cause";
+    /// 收发统计。仅在隧道 up 期间由 openconnect 周期性吐出。
+    pub const STATS: &str = "vpn://stats";
 }
 
 /// 应用级状态
@@ -90,6 +92,14 @@ pub struct LogPayload {
     pub profile_id: String,
     pub line: String,
     pub level: String,
+}
+
+/// 收发统计，单独走一条事件而不是混进日志。
+#[derive(Serialize, Clone)]
+pub struct StatsPayload {
+    pub profile_id: String,
+    #[serde(flatten)]
+    pub stats: crate::tunnel::Stats,
 }
 
 // ---------------------------------------------------------------------------
@@ -517,6 +527,41 @@ key_password: secret::key_password(&profile),
         state.next_session_id.fetch_add(1, Ordering::Relaxed)
     };
 
+    // ---- 统计心跳 ----
+    //
+    // openconnect 只在收到 SIGUSR1 时打印 `RX:/TX:`，没人发就永远没有
+    // 统计（`main.c:831` → `ssl.c:979`）。所以这里周期性地戳一下。
+    //
+    // 间隔 3s 是权衡：更快只是白跑系统调用，更慢则界面上的数字看着
+    // 像卡住了。心跳随 cancel 一起结束。
+    {
+        let c = cancel.clone();
+        let pid = pid_slot.clone();
+        std::thread::spawn(move || {
+            const INTERVAL: std::time::Duration = std::time::Duration::from_secs(3);
+            let uid = channel::current_uid();
+            let privileged = Channel2::detect(uid).is_privileged();
+            loop {
+                std::thread::sleep(INTERVAL);
+                if c.load(Ordering::SeqCst) {
+                    break;
+                }
+                if privileged {
+                    // openconnect 是 root 的子进程，普通用户 kill 不到
+                    // （EPERM），只能请持有它的 helper 代发。
+                    let _ = crate::ipc::client::HelperHandle::request_stats(uid);
+                } else if let Some(p) = *pid.lock().unwrap() {
+                    let _ = std::process::Command::new("kill")
+                        .arg("-USR1")
+                        .arg(p.to_string())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .status();
+                }
+            }
+        });
+    }
+
     let h_cancel = cancel.clone();
     let h_app = app.clone();
     let h_profile_id = profile_id.clone();
@@ -572,10 +617,21 @@ key_password: secret::key_password(&profile),
                             events::LOG,
                             LogPayload {
                                 profile_id: id_log.clone(),
-                                line,
+                                line: line.clone(),
                                 level,
                             },
                         );
+                        // 统计行既进日志也单独走一条事件：UI 要的是
+                        // 结构化计数，不是让人去日志里读数字。
+                        if let Some(s) = crate::tunnel::parse_stats(&line) {
+                            let _ = app_log.emit(
+                                events::STATS,
+                                StatsPayload {
+                                    profile_id: id_log.clone(),
+                                    stats: s,
+                                },
+                            );
+                        }
                     }
                     if let Some(s) = state {
                         // 日志推进的状态变化也要同步到托盘

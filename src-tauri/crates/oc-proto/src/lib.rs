@@ -33,6 +33,11 @@ pub mod authz;
 use serde::{Deserialize, Serialize};
 
 /// 协议版本。GUI 与 helper 必须一致，否则拒绝连接。
+///
+/// `Request::Stats` 是**追加**的变体，没有动既有请求的线上格式，
+/// 所以版本号不变：旧 GUI 不会发它，新 GUI 碰上旧 helper 只会拿到
+/// 一条 `Failed`（helper 反序列化不认识的变体），表现为「没有统计」
+/// 而不是功能异常 —— 为此bump 版本、逼所有用户重装助手并不划算。
 pub const PROTOCOL_VERSION: u16 = 1;
 
 /// helper 唯一允许执行的程序。
@@ -65,6 +70,13 @@ pub enum Request {
     },
     /// 断开当前隧道
     Stop,
+    /// 要一份收发统计。
+    ///
+    /// openconnect **不会**自己周期打印统计：CLI 里只有收到
+    /// `SIGUSR1` 才会调 `stats_handler`（`main.c:831` → `ssl.c:979`）。
+    /// 而 GUI 是普通用户、openconnect 由 root 跑，`kill -USR1` 直接
+    /// EPERM —— 只能由持有子进程的 helper 代发。
+    Stats,
     /// 查询状态
     Status,
     /// helper 主动退出（安装/卸载时用）

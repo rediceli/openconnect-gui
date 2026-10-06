@@ -42,6 +42,16 @@
   .s-connected{background:#e6f4ea;color:var(--ok)}
   .s-failed{background:#fce8e6;color:var(--err)}
   .msg{font-size:12px;color:var(--muted);margin-top:8px;min-height:18px}
+  /* 连接时长：等宽数字，否则秒数跳动时整行会左右晃。 */
+  .uptime{font-size:12px;color:var(--muted);font-variant-numeric:tabular-nums;
+          font-feature-settings:"tnum"}
+  .stats{display:flex;gap:8px;margin-top:10px}
+  .stats .stat{flex:1;min-width:0;background:var(--bg);border:1px solid var(--line);
+               border-radius:8px;padding:6px 8px}
+  .stats .k{display:block;font-size:11px;color:var(--muted)}
+  .stats .v{display:block;font-size:12px;margin-top:1px;
+            font-variant-numeric:tabular-nums;white-space:nowrap;
+            overflow:hidden;text-overflow:ellipsis}
 
   /* ---- 证书信任弹窗（TOFU）---- */
   #certmask{position:fixed;inset:0;background:rgba(0,0,0,.55);display:none;
@@ -92,15 +102,22 @@
   <!-- 连接 -->
   <div id="v-conn">
     <!-- 状态放在表单**上方**：VPN 类 App 里状态是第一眼要看的信息，
-         放在底部等于要滚动才看得见。 -->
+         放在底部等于要滚动才看得见。
+         状态区只讲连接本身：状态、时长、收发。
+         「菜单栏」「退出」两个按钮已移除 —— 托盘菜单里有同样的入口，
+         而关闭窗口本来就会缩到托盘（见 tray.rs），放在连接表单上方
+         只会让人以为点它才能退出。连接时长与流量只在隧道 up 期间
+         有意义，所以整个 #stats 默认隐藏。 -->
     <div class="card">
       <div class="row">
         <span class="pill s-idle" id="state">未连接</span>
         <span style="flex:1"></span>
-        <button class="ghost mini" id="btn-show">菜单栏</button>
-        <button class="ghost mini" id="btn-quit">退出</button>
+        <span class="uptime hide" id="stat-time">00:00</span>
       </div>
-      <div class="msg" id="tray-msg" style="margin-top:6px;font-size:11px"></div>
+      <div class="stats hide" id="stats">
+        <div class="stat"><span class="k">接收</span><span class="v" id="stat-rx">—</span></div>
+        <div class="stat"><span class="k">发送</span><span class="v" id="stat-tx">—</span></div>
+      </div>
     </div>
 
     <div class="card">
